@@ -1,0 +1,55 @@
+// Seed data for the homepage hero slider. Editable from the admin app
+// (Hero slides page) — each slide can point at the shop or the food/
+// restaurant side of the app, so the right slides show depending on
+// which mode the customer is browsing in.
+
+export const HERO_SLIDES = [
+  {
+    id: "hero-1",
+    theme: "shop",
+    eyebrow: "Season Sale",
+    title: "Every stall in the market,\nunder one roof.",
+    subtitle: "Shop thousands of products from independent vendors across Liberia — phones, fashion, groceries and more.",
+    image: null,
+    emoji: "🛍️",
+    buttonText: "Shop now",
+    buttonLink: "/category/cat-phones",
+    buttonText2: "Sell on Yana Buy",
+    buttonLink2: "/sell",
+    active: true,
+    order: 0,
+    createdAt: "2025-04-01T09:00:00Z",
+  },
+  {
+    id: "hero-2",
+    theme: "shop",
+    eyebrow: "New arrivals",
+    title: "Fresh drops daily\nfrom local vendors.",
+    subtitle: "Discover new products added by Yana Buy vendors every day, with Mobile Money checkout.",
+    image: null,
+    emoji: "✨",
+    buttonText: "See what's new",
+    buttonLink: "/search?q=",
+    buttonText2: "",
+    buttonLink2: "",
+    active: true,
+    order: 1,
+    createdAt: "2025-04-02T09:00:00Z",
+  },
+  {
+    id: "hero-3",
+    theme: "food",
+    eyebrow: "Hungry?",
+    title: "Your favorite meals,\ndelivered hot.",
+    subtitle: "Order from local restaurants in Monrovia and get it delivered straight to your door.",
+    image: null,
+    emoji: "🍲",
+    buttonText: "Order food",
+    buttonLink: "/food",
+    buttonText2: "",
+    buttonLink2: "",
+    active: true,
+    order: 0,
+    createdAt: "2025-04-03T09:00:00Z",
+  },
+];
