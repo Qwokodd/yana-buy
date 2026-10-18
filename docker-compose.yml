@@ -1,0 +1,25 @@
+name: yanabuy-v3
+
+# Only the database runs in Docker. Redis isn't needed any more.
+# The v3 database lives in its own volume and uses port 5433, so it never
+# touches the old v2 database (which uses 5432).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: yanabuy
+      POSTGRES_PASSWORD: yanabuy_dev_password
+      POSTGRES_DB: yanabuy
+    ports:
+      - "5433:5432"
+    volumes:
+      - yanabuy_v3_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yanabuy -d yanabuy"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  yanabuy_v3_data:

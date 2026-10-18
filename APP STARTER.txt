@@ -1,0 +1,51 @@
+1. ROOT FOLDER TERMINAL
+npm run db:up
+docker ps
+
+2. SERVER TERMINAL
+npm install
+cd apps/server
+npx prisma migrate status
+npx prisma generate
+
+
+3.ROOT FOLDER
+docker exec yanabuy-postgres-1 psql -U yanabuy -d yanabuy_dev -c "SELECT phone, role FROM users;"
+docker exec yanabuy-postgres-1 psql -U yanabuy -d yanabuy_dev -c "SELECT name, status, approved_at FROM products;"
+
+4. SERVER TERMINAL
+npm run dev
+
+
+
+
+YB v3 NEW START UP
+npm install
+npm install-scripts approve argon2
+npm install-scripts approve @prisma/client
+npm install-scripts approve @prisma/engines
+npm install-scripts approve prisma
+npm install-scripts approve esbuild
+npm run db:up
+npm run create-admin -- --phone 0770000001 --password "adminpass123" --name "YanaBuy Admin"
+
+cd apps/server
+cp .env.example .env
+npx prisma migrate dev --name init
+
+
+server	npm run dev:server
+web	npm run dev:web
+admin	npm run dev:admin
+mobile	npm run dev:mobile
+
+YB v3
+npm install
+npm run db:up
+npm run create-admin -- --phone 0770000001 --password "adminpass123" --name "YanaBuy Admin"
+
+
+server	npm run dev:server
+web	npm run dev:web
+admin	npm run dev:admin
+mobile	npm run dev:mobile

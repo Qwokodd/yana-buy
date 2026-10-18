@@ -1,0 +1,42 @@
+{
+  "name": "@yanabuy/mobile",
+  "version": "3.0.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "expo": "~57.0.25",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3",
+    "@yanabuy/shared": "*",
+    "expo-router": "~57.0.23",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "expo-linking": "~57.0.11",
+    "expo-constants": "~57.0.19",
+    "expo-notifications": "~57.0.23",
+    "expo-device": "~57.0.2",
+    "expo-image-picker": "~57.0.20",
+    "expo-secure-store": "~57.0.4",
+    "expo-image": "~57.0.5",
+    "expo-font": "~57.0.4",
+    "expo-splash-screen": "~57.0.9",
+    "react-native-svg": "15.15.4",
+    "@expo-google-fonts/bricolage-grotesque": "^0.4.1",
+    "@expo-google-fonts/figtree": "^0.4.1",
+    "react-native-web": "~0.21.0",
+    "react-dom": "19.2.3",
+    "@expo/metro-runtime": "~57.0.16"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit"
+  },
+  "private": true
+}

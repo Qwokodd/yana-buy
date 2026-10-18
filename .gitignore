@@ -1,0 +1,19 @@
+node_modules
+.next
+dist
+.expo
+apps/server/uploads/*
+!apps/server/uploads/.gitkeep
+.env
+*.tsbuildinfo
+apps/server/private-uploads/*
+!apps/server/private-uploads/.gitkeep
+
+# Shopify exports hold customers' personal details — never commit them
+shopify-import/
+
+# Big backups and secret keys — never commit or upload them
+*.zip
+*.rar
+*.tgz
+*firebase-adminsdk*.json

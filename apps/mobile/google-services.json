@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "961254141337",
+    "project_id": "yanabuy-96bc0",
+    "storage_bucket": "yanabuy-96bc0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:961254141337:android:10ffdfaa29a1425414f708",
+        "android_client_info": {
+          "package_name": "com.yanabuy.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDCmzJF8BG7YIP9UDxESPLekSUJIPKOx6w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

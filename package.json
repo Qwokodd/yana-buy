@@ -1,0 +1,26 @@
+{
+  "name": "yanabuy",
+  "private": true,
+  "version": "3.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "dev:server": "npm run dev --workspace=@yanabuy/server",
+    "dev:web": "npm run dev --workspace=@yanabuy/web",
+    "dev:admin": "npm run dev --workspace=@yanabuy/admin",
+    "dev:mobile": "npm run start --workspace=@yanabuy/mobile",
+    "create-admin": "npm run create-admin --workspace=@yanabuy/server --",
+    "import-shopify": "npm run import-shopify --workspace=@yanabuy/server --",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}
