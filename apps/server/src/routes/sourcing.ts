@@ -8,7 +8,7 @@ import { getDelivery } from "../lib/delivery";
 import { paymentOut, startPayment } from "../lib/payments";
 import { loadSourcing, sourcingEvent, sourcingOut } from "../lib/sourcing";
 import { imageUrl, optionalText, phone, requiredText } from "../lib/validation";
-import { requireAuth, requireEmail } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
 import { notifyAdmins } from "../lib/notify";
 
 /** "Buy it from China for me". Mounted at /api/sourcing. */
@@ -49,7 +49,7 @@ sourcingRouter.get("/", async (req, res) => {
   res.json({ items: await Promise.all(rows.map((r) => sourcingOut(r))) });
 });
 
-sourcingRouter.post("/", requireEmail, async (req, res) => {
+sourcingRouter.post("/", async (req, res) => {
   const input = parse(createSchema, req.body);
   if (!input.link && !input.images.length) {
     throw new HttpError(400, "Add a link or at least one photo so we know what to look for", { link: "Add a link or a photo" });
@@ -70,8 +70,8 @@ sourcingRouter.post("/", requireEmail, async (req, res) => {
 
 sourcingRouter.get("/:id", async (req, res) => {
   const settings = await getDelivery();
-  // Pay on delivery always works for China orders; mobile money / card when switched on.
-  const payMethods = (["cod", "mtn_momo", "orange_money", "card"] as const).filter((m) => m === "cod" || settings.methods[m]);
+  // China orders are paid online first (mobile money / card, when switched on) — no cash on delivery.
+  const payMethods = (["mtn_momo", "orange_money", "card"] as const).filter((m) => settings.methods[m]);
   res.json({ request: await sourcingOut(await mine(req.params.id, req.user!.id)), payMethods });
 });
 
@@ -106,7 +106,7 @@ sourcingRouter.post("/:id/accept", async (req, res) => {
   const r = await mine(req.params.id, req.user!.id);
   if (r.status !== "quoted" || !r.quotePrice) throw new HttpError(409, "There's no quote to accept on this request");
   const settings = await getDelivery();
-  if (input.paymentMethod !== "cod" && !settings.methods[input.paymentMethod]) {
+  if (input.paymentMethod === "cod" || !settings.methods[input.paymentMethod]) {
     throw new HttpError(400, "That way of paying isn't available yet", { paymentMethod: "Not available yet" });
   }
   const pendingPay = await db
@@ -126,24 +126,19 @@ sourcingRouter.post("/:id/accept", async (req, res) => {
       deliveryAddress: d.address,
       paymentMethod: input.paymentMethod,
       updatedAt: new Date(),
-      ...(input.paymentMethod === "cod" ? { status: "accepted" as const } : {}),
     })
     .where(eq(sourcingRequests.id, r.id));
 
-  let payment = null;
-  if (input.paymentMethod === "cod") {
-    await sourcingEvent(r.id, "accepted", req.user!.id, "Paying on delivery");
-  } else {
-    const row = await startPayment({
-      buyerId: req.user!.id,
-      method: input.paymentMethod,
-      amount: r.quotePrice,
-      phone: input.paymentPhone ?? d.phone,
-      orderIds: [],
-      sourcingId: r.id,
-      label: `YanaBuy China order CS-${r.number}`,
-    });
-    payment = await paymentOut(row);
-  }
+  // Paid online first; the request is accepted once the payment comes through.
+  const row = await startPayment({
+    buyerId: req.user!.id,
+    method: input.paymentMethod,
+    amount: r.quotePrice,
+    phone: input.paymentPhone ?? d.phone,
+    orderIds: [],
+    sourcingId: r.id,
+    label: `YanaBuy China order CS-${r.number}`,
+  });
+  const payment = await paymentOut(row);
   res.json({ request: await sourcingOut(await loadSourcing(r.id)), payment });
 });

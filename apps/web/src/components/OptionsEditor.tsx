@@ -1,6 +1,6 @@
 "use client";
 
-import { cleanOptions, combinations, rowKey, rowOf, variantLabel, type OptionDraft, type OptionsDraft, type RowDraft } from "@yanabuy/shared";
+import { cleanOptions, combinations, rowKey, rowOf, variantLabel, type OptionDraft, type OptionsDraft, type RowDraft, type WeightUnit } from "@yanabuy/shared";
 import { TextInput } from "@yanabuy/web-kit";
 
 export { collectOptions, draftFrom, type OptionsDraft } from "@yanabuy/shared";
@@ -13,12 +13,23 @@ const PLACEHOLDER = [
   ["Material", "Cotton, Silk"],
 ];
 
-export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft; onChange: (d: OptionsDraft) => void; error?: string | null }) {
+export function OptionsEditor({
+  value,
+  onChange,
+  error,
+  weightUnit = "kg",
+}: {
+  value: OptionsDraft;
+  onChange: (d: OptionsDraft) => void;
+  error?: string | null;
+  /** Each combination's weight is typed in this unit. */
+  weightUnit?: WeightUnit;
+}) {
   const options = cleanOptions(value);
   const combos = options.length && options.every((o) => o.name && o.values.length) ? combinations(options) : [];
   const setOption = (i: number, patch: Partial<OptionDraft>) => onChange({ ...value, options: value.options.map((o, n) => (n === i ? { ...o, ...patch } : o)) });
   const setRow = (values: string[], patch: Partial<RowDraft>) => onChange({ ...value, rows: { ...value.rows, [rowKey(values)]: { ...rowOf(value, values), ...patch } } });
-  const fillAll = (field: "price" | "stock") => {
+  const fillAll = (field: "price" | "stock" | "weight") => {
     const first = combos.map((c) => rowOf(value, c)[field]).find((v) => v && v.trim());
     if (!first) return;
     const rows = { ...value.rows };
@@ -34,7 +45,7 @@ export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft;
     <div className="flex flex-col gap-3 rounded-2xl bg-ground p-4">
       <div>
         <p className="text-sm font-bold">Options (optional)</p>
-        <p className="text-[12.5px] text-muted">For colours, sizes or minimum order quantity. Each combination gets its own price and stock.</p>
+        <p className="text-[12.5px] text-muted">For colours, sizes or minimum order quantity. Each combination gets its own price, stock and (if it differs) weight.</p>
       </div>
       {value.options.map((o, i) => (
         <div key={i} className="flex flex-col gap-2 rounded-xl bg-white p-3">
@@ -70,6 +81,9 @@ export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft;
               <button type="button" onClick={() => fillAll("stock")} className="font-bold text-purple hover:underline">
                 Same stock for all
               </button>
+              <button type="button" onClick={() => fillAll("weight")} className="font-bold text-purple hover:underline">
+                Same weight for all
+              </button>
             </span>
           </div>
           <ul className="flex flex-col gap-2">
@@ -84,17 +98,18 @@ export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft;
                     {!r.on && <span className="font-normal text-muted">— not sold</span>}
                   </label>
                   {r.on && (
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {(
                         [
                           ["price", "Price ($)", "decimal", "24.99"],
                           ["compareAtPrice", "Old price", "decimal", ""],
                           ["stock", "Stock", "numeric", "—"],
+                          ["weight", `Weight (${weightUnit})`, "decimal", "Same as product"],
                         ] as const
                       ).map(([field, title, mode, ph]) => (
                         <label key={field} className="flex flex-col gap-1 text-[11.5px] font-semibold text-muted">
                           {title}
-                          <TextInput aria-label={`${label} ${title}`} inputMode={mode} value={r[field]} onChange={(e) => setRow(c, { [field]: e.target.value })} placeholder={ph} className="h-10" />
+                          <TextInput aria-label={`${label} ${title}`} inputMode={mode} value={r[field] ?? ""} onChange={(e) => setRow(c, { [field]: e.target.value })} placeholder={ph} className="h-10" />
                         </label>
                       ))}
                     </div>

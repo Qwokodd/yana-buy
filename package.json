@@ -15,7 +15,8 @@
     "dev:mobile": "npm run start --workspace=@yanabuy/mobile",
     "create-admin": "npm run create-admin --workspace=@yanabuy/server --",
     "import-shopify": "npm run import-shopify --workspace=@yanabuy/server --",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test-sms": "npm run test-sms --workspace=@yanabuy/server --"
   },
   "engines": {
     "node": ">=20"

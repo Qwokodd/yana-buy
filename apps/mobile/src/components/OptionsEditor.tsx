@@ -1,5 +1,5 @@
 import { Pressable, Text, TextInput, View } from "react-native";
-import { cleanOptions, combinations, rowKey, rowOf, variantLabel, type OptionDraft, type OptionsDraft, type RowDraft } from "@yanabuy/shared";
+import { cleanOptions, combinations, rowKey, rowOf, variantLabel, type OptionDraft, type OptionsDraft, type RowDraft, type WeightUnit } from "@yanabuy/shared";
 import { Field } from "@/components/ui";
 import { colors, font } from "@/lib/theme";
 
@@ -11,7 +11,21 @@ const PLACEHOLDER = [
   ["Material", "Cotton, Silk"],
 ];
 
-function Small({ label, value, onChange, disabled, numeric }: { label: string; value: string; onChange: (v: string) => void; disabled?: boolean; numeric?: "decimal" | "whole" }) {
+function Small({
+  label,
+  value,
+  onChange,
+  disabled,
+  numeric,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  numeric?: "decimal" | "whole";
+  placeholder?: string;
+}) {
   return (
     <View style={{ flex: 1, gap: 3 }}>
       <Text style={{ fontFamily: font.semibold, fontSize: 11.5, color: colors.muted }}>{label}</Text>
@@ -22,14 +36,25 @@ function Small({ label, value, onChange, disabled, numeric }: { label: string; v
         editable={!disabled}
         keyboardType={numeric === "whole" ? "number-pad" : "decimal-pad"}
         placeholderTextColor="#9A91A3"
-        placeholder={label.startsWith("Stock") ? "—" : ""}
+        placeholder={placeholder ?? (label.startsWith("Stock") ? "—" : "")}
         style={{ height: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.lineStrong, backgroundColor: "#fff", paddingHorizontal: 10, fontFamily: font.regular, fontSize: 14, color: colors.ink }}
       />
     </View>
   );
 }
 
-export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft; onChange: (d: OptionsDraft) => void; error?: string }) {
+export function OptionsEditor({
+  value,
+  onChange,
+  error,
+  weightUnit = "kg",
+}: {
+  value: OptionsDraft;
+  onChange: (d: OptionsDraft) => void;
+  error?: string;
+  /** Each combination's weight is typed in this unit. */
+  weightUnit?: WeightUnit;
+}) {
   const options = cleanOptions(value);
   const combos = options.length && options.every((o) => o.name && o.values.length) ? combinations(options) : [];
   const setOption = (i: number, patch: Partial<OptionDraft>) => onChange({ ...value, options: value.options.map((o, n) => (n === i ? { ...o, ...patch } : o)) });
@@ -51,7 +76,7 @@ export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft;
     <View style={{ gap: 10, backgroundColor: colors.ground, borderRadius: 14, padding: 12 }}>
       <View style={{ gap: 2 }}>
         <Text style={{ fontFamily: font.bold, fontSize: 14, color: colors.ink }}>Options (optional)</Text>
-        <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>For colours, sizes or minimum order quantity. Each combination gets its own price and stock.</Text>
+        <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>For colours, sizes or minimum order quantity. Each combination gets its own price, stock and (if it differs) weight.</Text>
       </View>
       {value.options.map((o, i) => (
         <View key={i} style={{ gap: 8, backgroundColor: "#fff", borderRadius: 12, padding: 10 }}>
@@ -96,6 +121,12 @@ export function OptionsEditor({ value, onChange, error }: { value: OptionsDraft;
                     <Small label="Price ($)" value={r.price} onChange={(v) => setRow(c, { price: v })} />
                     <Small label="Old price" value={r.compareAtPrice} onChange={(v) => setRow(c, { compareAtPrice: v })} />
                     <Small label="Stock" value={r.stock} onChange={(v) => setRow(c, { stock: v })} numeric="whole" />
+                  </View>
+                )}
+                {r.on && (
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    <Small label={`Weight (${weightUnit})`} value={r.weight ?? ""} onChange={(v) => setRow(c, { weight: v })} placeholder="Same as product" />
+                    <View style={{ flex: 2 }} />
                   </View>
                 )}
               </View>

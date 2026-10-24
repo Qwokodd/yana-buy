@@ -35,8 +35,9 @@ export function normalizePhone(input: string): string | null {
 /** @deprecated use normalizePhone — kept because many screens import it. Accepts Liberian and US numbers. */
 export const normalizeLiberianPhone = normalizePhone;
 
-/** +231888777999 → "0888 777 999"; +12155550123 → "(215) 555-0123". */
-export function formatPhone(e164: string): string {
+/** +231888777999 → "0888 777 999"; +12155550123 → "(215) 555-0123". No number → "". */
+export function formatPhone(e164: string | null | undefined): string {
+  if (!e164) return "";
   const us = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164);
   if (us) return `(${us[1]}) ${us[2]}-${us[3]}`;
   const national = e164.replace(/^\+231/, "0");

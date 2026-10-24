@@ -9,7 +9,7 @@ import { colors, font } from "@/lib/theme";
 
 export default function Categories() {
   const insets = useSafeAreaInsets();
-  const { mode, setMode } = useMode();
+  const { mode, switchMode } = useMode();
   const { categories, error, reload } = useCategories(mode);
   const router = useRouter();
 
@@ -26,7 +26,7 @@ export default function Categories() {
             key={m}
             accessibilityRole="button"
             accessibilityState={{ selected: mode === m }}
-            onPress={() => setMode(m)}
+            onPress={() => switchMode(m)}
             style={{ flex: 1, height: 38, borderRadius: 999, alignItems: "center", justifyContent: "center", backgroundColor: mode === m ? (m === "goods" ? colors.amber : colors.orange) : "transparent" }}
           >
             <Text style={{ fontFamily: font.bold, fontSize: 14, color: colors.ink }}>{m === "goods" ? "Goods & Services" : "Food"}</Text>

@@ -1,7 +1,10 @@
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, isNotNull, lte, type SQL } from "drizzle-orm";
+import { db } from "../db/client";
+import { summarize } from "./variants";
 import { alias } from "drizzle-orm/pg-core";
-import type { AdminProduct, MyProduct, Product, ProductCard, ShopSummary } from "@yanabuy/shared";
+import type { AdminProduct, Fulfilment, MyProduct, Product, ProductCard, ShopSummary } from "@yanabuy/shared";
 import { categories, products, shops, users, type CategoryRow, type ProductRow, type ShopRow } from "../db/schema";
+import { buyerPrice, buyerPriceOrNull } from "./finance";
 
 /** Shoppers only ever see products that are approved, not paused, from an approved shop whose owner isn't blocked. */
 export const liveProduct: SQL = and(
@@ -24,6 +27,34 @@ export const productColumns = {
 
 export type ProductJoin = { product: ProductRow; shop: ShopRow; category: Pick<CategoryRow, "id" | "name" | "slug"> | null };
 
+/**
+ * Prices right now. A flash sale whose end time has passed shows the old price again
+ * (the background job below also writes that back to the database).
+ */
+export function livePrices(p: ProductRow, now = new Date()) {
+  if (!p.saleEndsAt || p.saleEndsAt > now) return { price: p.price, compareAtPrice: p.compareAtPrice, variants: p.variants, saleEndsAt: p.saleEndsAt };
+  const variants = p.variants.map((v) => ({ ...v, price: v.compareAtPrice ?? v.price, compareAtPrice: null }));
+  return {
+    price: variants.length ? summarize(variants).price : (p.compareAtPrice ?? p.price),
+    compareAtPrice: null,
+    variants,
+    saleEndsAt: null,
+  };
+}
+
+/** Ends flash sales whose time is up: the old price becomes the price again. */
+export async function endFlashSales() {
+  const due = await db.select().from(products).where(and(isNotNull(products.saleEndsAt), lte(products.saleEndsAt, new Date())));
+  for (const p of due) {
+    const live = livePrices(p);
+    await db
+      .update(products)
+      .set({ price: live.price, compareAtPrice: null, variants: live.variants, saleEndsAt: null, updatedAt: new Date() })
+      .where(eq(products.id, p.id));
+  }
+  return due.length;
+}
+
 /** Average stars to one decimal, or null with no reviews. */
 export const average = (total: number, count: number) => (count ? Math.round((total / count) * 10) / 10 : null);
 
@@ -31,13 +62,16 @@ function shopSummary(s: ShopRow): ShopSummary {
   return { id: s.id, name: s.name, slug: s.slug, kind: s.kind, city: s.city, logoUrl: s.logoUrl, country: s.country };
 }
 
-export function productCard({ product: p, shop, category }: ProductJoin): ProductCard {
+export function productCard({ product: row, shop, category }: ProductJoin, how: Fulfilment = "delivery"): ProductCard {
+  const p = { ...row, ...livePrices(row) };
   return {
     id: p.id,
     kind: p.kind,
     name: p.name,
-    price: p.price,
-    compareAtPrice: p.compareAtPrice,
+    // Buyers see one price: the seller's price with YanaBuy's commission already in it.
+    // Food: depends on delivery / pickup / eat in (eat in = the restaurant's own price).
+    price: buyerPrice(p.price, p.kind, how),
+    compareAtPrice: buyerPriceOrNull(p.compareAtPrice, p.kind, how),
     image: p.images[0] ?? null,
     inStock: p.stock === null || p.stock > 0,
     featured: p.featured,
@@ -48,18 +82,20 @@ export function productCard({ product: p, shop, category }: ProductJoin): Produc
     shipsFromChina: p.shipsFromChina,
     deliveryDays: p.deliveryDays,
     hasOptions: p.variants.length > 0,
+    saleEndsAt: p.saleEndsAt?.toISOString() ?? null,
   };
 }
 
-export function productFull(row: ProductJoin): Product {
-  const p = row.product;
+export function productFull(row: ProductJoin, how: Fulfilment = "delivery"): Product {
+  const p = { ...row.product, ...livePrices(row.product) };
   return {
-    ...productCard(row),
+    ...productCard(row, how),
     description: p.description,
     images: p.images,
     stock: p.stock,
     options: p.options,
-    variants: p.variants,
+    variants: p.variants.map((v) => ({ ...v, price: buyerPrice(v.price, p.kind, how), compareAtPrice: buyerPriceOrNull(v.compareAtPrice, p.kind, how) })),
+    weightGrams: p.weightGrams,
     bookable: p.bookable,
     durationMinutes: p.durationMinutes,
     createdAt: p.createdAt.toISOString(),
@@ -68,9 +104,15 @@ export function productFull(row: ProductJoin): Product {
 }
 
 export function myProduct(row: ProductJoin): MyProduct {
-  const p = row.product;
+  const p = { ...row.product, ...livePrices(row.product) };
+  const full = productFull(row);
   return {
-    ...productFull(row),
+    ...full,
+    // The seller (and admin) work with the seller's own prices; buyerPrice is what shoppers see.
+    price: p.price,
+    compareAtPrice: p.compareAtPrice,
+    variants: p.variants,
+    buyerPrice: full.price,
     status: p.status,
     statusReason: p.statusReason,
     hidden: p.hidden,

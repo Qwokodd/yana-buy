@@ -5,15 +5,21 @@ import { setStatusBarStyle } from "expo-status-bar";
 import { useCallback, useEffect, useState } from "react";
 import { Image } from "expo-image";
 import { BagLogo, SearchIcon } from "@/components/Icons";
-import { CategoryTile, HeroBanners, PromoCards } from "@/components/Banners";
+import { HeroBanners } from "@/components/Banners";
+import { CategoryCards, FeaturedRow, PromosRow } from "@/components/HomeSections";
 import { useBranding } from "@/lib/branding";
 import { useBanners, useCategories } from "@/lib/catalog";
-import { GridPlaceholder, ProductGrid } from "@/components/Products";
+import { GridPlaceholder } from "@/components/Products";
+import { ProductFeed } from "@/components/Feed";
+import { nearBottom, useProductFeed } from "@/lib/feed";
 import { api } from "@/lib/api";
-import type { ProductCard, PublicShop } from "@yanabuy/shared";
+import type { PublicShop } from "@yanabuy/shared";
 import { ShopCard } from "@/components/ShopCard";
 import { Avatar } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { setBrowsing, workspaceFor, workspaceTitle } from "@/lib/workspace";
+import { SellerMenu } from "@/components/SellerMenu";
+import { FOOD_HOW } from "@/components/FoodHowPicker";
 import { useMode } from "@/lib/mode";
 import { useCountry } from "@/lib/country";
 import { CountryPicker } from "@/components/CountryPicker";
@@ -21,7 +27,7 @@ import { colors, font } from "@/lib/theme";
 
 export default function Home() {
   const insets = useSafeAreaInsets();
-  const { mode, setMode } = useMode();
+  const { mode, setMode, switchMode, foodHow, askFoodHow } = useMode();
   const { country } = useCountry();
   const { user } = useAuth();
   const router = useRouter();
@@ -29,7 +35,6 @@ export default function Home() {
   const branding = useBranding();
   const { categories } = useCategories(mode);
   const { banners } = useBanners(mode);
-  const [products, setProducts] = useState<ProductCard[] | null>(null);
   const [search, setSearch] = useState("");
   const [shops, setShops] = useState<PublicShop[]>([]);
   useEffect(() => {
@@ -39,15 +44,12 @@ export default function Home() {
       .catch(() => setShops([]));
   }, [mode]);
 
-  useEffect(() => {
-    setProducts(null);
-    api.public
-      .products({ mode, sort: "best" })
-      .then((res) => setProducts(res.items))
-      .catch(() => setProducts([]));
-  }, [mode]);
+  const feed = useProductFeed({ mode, sort: "best" });
+  const products = feed.items;
   const heroes = (banners ?? []).filter((b) => b.placement === "hero");
   const promos = (banners ?? []).filter((b) => b.placement === "strip");
+  // Ads between rows of products: the promo banners, or the top ones if there are none.
+  const feedAds = promos.length ? promos : heroes;
   const isYanaBuy = branding.appName.replace(/\s/g, "").toLowerCase() === "yanabuy";
 
   // White status-bar text over the purple header; dark everywhere else.
@@ -59,8 +61,27 @@ export default function Home() {
   );
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: colors.ground }} contentContainerStyle={{ paddingBottom: 24 }}>
+    <ScrollView
+      style={{ flex: 1, backgroundColor: colors.ground }}
+      contentContainerStyle={{ paddingBottom: 24 }}
+      scrollEventThrottle={200}
+      onScroll={(e) => {
+        if (!feed.done && !feed.error && nearBottom(e)) void feed.loadNext();
+      }}
+    >
       <View style={{ backgroundColor: colors.purple, paddingTop: insets.top + 14, paddingHorizontal: 18, paddingBottom: 22, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, gap: 14 }}>
+        {workspaceFor(user) && (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              setBrowsing(false);
+              router.replace(workspaceFor(user)!);
+            }}
+            style={{ alignSelf: "flex-start", backgroundColor: colors.amber, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 7 }}
+          >
+            <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>← Back to {workspaceTitle(user)}</Text>
+          </Pressable>
+        )}
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
             {branding.logoUrl ? (
@@ -92,7 +113,9 @@ export default function Home() {
           </View>
         </View>
 
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, height: 48, paddingLeft: 16, paddingRight: 16, backgroundColor: "#fff", borderRadius: 999 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <SellerMenu />
+        <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10, height: 48, paddingLeft: 16, paddingRight: 16, backgroundColor: "#fff", borderRadius: 999 }}>
           <SearchIcon />
           <TextInput
             value={search}
@@ -107,6 +130,7 @@ export default function Home() {
             style={{ flex: 1, fontFamily: font.regular, fontSize: 14, color: colors.ink }}
           />
         </View>
+        </View>
 
         <View style={{ flexDirection: "row", padding: 4, backgroundColor: "rgba(255,255,255,0.10)", borderRadius: 999 }}>
           {(["goods", "food"] as const).map((m) => (
@@ -114,27 +138,27 @@ export default function Home() {
               key={m}
               accessibilityRole="button"
               accessibilityState={{ selected: mode === m }}
-              onPress={() => setMode(m)}
+              onPress={() => switchMode(m)}
               style={{ flex: 1, height: 38, borderRadius: 999, alignItems: "center", justifyContent: "center", backgroundColor: mode === m ? (m === "goods" ? colors.amber : colors.orange) : "transparent" }}
             >
               <Text style={{ fontFamily: font.bold, fontSize: 14, color: mode === m ? colors.ink : "#fff" }}>{m === "goods" ? "Goods & Services" : "Food"}</Text>
             </Pressable>
           ))}
         </View>
+        {mode === "food" && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Food: ${FOOD_HOW.find((o) => o.value === foodHow)?.title}. Change`}
+            onPress={askFoodHow}
+            style={{ alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.orange, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 }}
+          >
+            <Text style={{ fontSize: 15 }}>{FOOD_HOW.find((o) => o.value === foodHow)?.icon}</Text>
+            <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>{FOOD_HOW.find((o) => o.value === foodHow)?.title} · change</Text>
+          </Pressable>
+        )}
       </View>
 
       <View style={{ padding: 18, gap: 18 }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 14 }} accessibilityLabel="Categories">
-          {(categories ?? []).map((c) => (
-            <Pressable key={c.id} accessibilityRole="button" accessibilityLabel={c.name} onPress={() => router.push({ pathname: "/search", params: { category: c.slug } })} style={{ width: 64, alignItems: "center", gap: 6 }}>
-              <CategoryTile name={c.name} iconUrl={c.iconUrl} />
-              <Text style={{ fontFamily: font.semibold, fontSize: 11.5, color: colors.ink, textAlign: "center" }} numberOfLines={2}>
-                {c.name}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-
         {banners === null ? (
           <View style={{ height: 160, borderRadius: 20, backgroundColor: colors.lineStrong, opacity: 0.5 }} />
         ) : heroes.length ? (
@@ -150,7 +174,10 @@ export default function Home() {
           </View>
         )}
 
-        {promos.length > 0 && <PromoCards banners={promos} />}
+        <CategoryCards categories={categories ?? []} mode={mode} />
+        {mode === "goods" && <FeaturedRow mode={mode} />}
+        <PromosRow mode={mode} />
+
         {mode === "goods" && (
           <Pressable
             accessibilityRole="link"
@@ -187,14 +214,7 @@ export default function Home() {
         {products === null ? (
           <GridPlaceholder />
         ) : products.length ? (
-          <>
-            <ProductGrid products={products.slice(0, 12)} />
-            {products.length > 12 && (
-              <Pressable accessibilityRole="button" onPress={() => router.push("/search")} style={{ alignItems: "center", paddingVertical: 10 }}>
-                <Text style={{ fontFamily: font.bold, fontSize: 14, color: colors.purple }}>See everything ›</Text>
-              </Pressable>
-            )}
-          </>
+          <ProductFeed products={products} ads={feedAds} done={feed.done} loading={feed.loading} error={feed.error} onRetry={feed.loadNext} />
         ) : (
           <View style={{ backgroundColor: "#fff", borderRadius: 18, borderWidth: 1, borderColor: colors.line, padding: 24, alignItems: "center", gap: 6 }}>
           <Text style={{ fontFamily: font.display, fontSize: 17, color: colors.ink }}>Shops are getting ready</Text>

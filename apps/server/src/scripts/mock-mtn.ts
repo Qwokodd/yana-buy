@@ -8,6 +8,7 @@
 import { createServer } from "node:http";
 
 const requests = new Map<string, { payer: string; amount: string; currency: string }>();
+const transfers = new Map<string, { payee: string; amount: string; currency: string }>();
 
 createServer((req, res) => {
   const send = (status: number, body?: unknown) => {
@@ -20,7 +21,34 @@ createServer((req, res) => {
     if (!req.headers.authorization?.startsWith("Basic ")) return send(401, {});
     return send(200, { access_token: "mock-token", token_type: "access_token", expires_in: 3600 });
   }
+  if (req.method === "POST" && req.url === "/disbursement/token/") {
+    if (!req.headers.authorization?.startsWith("Basic ")) return send(401, {});
+    return send(200, { access_token: "mock-disb-token", token_type: "access_token", expires_in: 3600 });
+  }
   if (!req.headers.authorization?.startsWith("Bearer ") || !req.headers["x-target-environment"]) return send(401, {});
+
+  // Disbursements (payouts): payee numbers ending in 1 succeed, 2 fail, 9 = MTN refuses, anything else stays waiting.
+  if (req.method === "POST" && req.url === "/disbursement/v1_0/transfer") {
+    let raw = "";
+    req.on("data", (c) => (raw += c));
+    req.on("end", () => {
+      const ref = String(req.headers["x-reference-id"] ?? "");
+      const body = JSON.parse(raw || "{}");
+      if (!ref || !body.payee?.partyId || !body.amount) return send(400, { message: "bad request" });
+      if (body.payee.partyId.endsWith("9")) return send(400, { code: "PAYEE_NOT_FOUND", message: "payee not found" });
+      transfers.set(ref, { payee: body.payee.partyId, amount: body.amount, currency: body.currency });
+      send(202);
+    });
+    return;
+  }
+  const t = req.url?.match(/^\/disbursement\/v1_0\/transfer\/(.+)$/);
+  if (req.method === "GET" && t) {
+    const r = transfers.get(t[1]);
+    if (!r) return send(404, { message: "not found" });
+    const last = r.payee.slice(-1);
+    const status = last === "1" ? "SUCCESSFUL" : last === "2" ? "FAILED" : "PENDING";
+    return send(200, { amount: r.amount, currency: r.currency, financialTransactionId: status === "SUCCESSFUL" ? `MTND${Date.now()}` : undefined, status, reason: status === "FAILED" ? "NOT_ENOUGH_FUNDS" : undefined });
+  }
 
   if (req.method === "POST" && req.url === "/collection/v1_0/requesttopay") {
     let raw = "";

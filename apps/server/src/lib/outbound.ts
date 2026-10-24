@@ -66,9 +66,29 @@ export async function sendEmail(to: string, subject: string, html: string, text:
   }
 }
 
+/** Plain characters every phone network handles (GSM-7): fancy dashes, quotes and dots become simple ones. */
+const GSM = /^[A-Za-z0-9 \r\n@£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà^{}\\\[~\]|€]*$/;
+export function smsText(body: string) {
+  let t = body
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/[\u2022\u00B7]/g, "*")
+    .replace(/\u00A0/g, " ");
+  if (!GSM.test(t)) t = [...t].map((c) => (GSM.test(c) ? c : "?")).join("");
+  return t;
+}
+/**
+ * One SMS is 160 plain characters. Liberian networks don't join longer messages
+ * together, so texts are kept to one part.
+ */
+export const SMS_MAX = 160;
+
 /** Sends one text message through Twilio. Returns false (never throws) if SMS is off or the send failed. */
 export async function sendSms(to: string, body: string): Promise<boolean> {
-  const text = body.length > 320 ? `${body.slice(0, 317)}…` : body;
+  const plain = smsText(body);
+  const text = plain.length > SMS_MAX ? `${plain.slice(0, SMS_MAX - 3)}...` : plain;
   if (env.OUTBOX_FILE) {
     toOutbox({ channel: "sms", to, text });
     return true;

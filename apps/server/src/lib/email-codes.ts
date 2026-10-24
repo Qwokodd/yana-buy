@@ -9,22 +9,29 @@ import { getBranding } from "./branding";
 const MINUTES = 15;
 const hash = (code: string) => createHash("sha256").update(code).digest("hex");
 
-/** Email is required (and must be confirmed) only once email sending is set up. */
-export const emailRequired = () => emailReady();
-export const needsEmail = (u: Pick<UserRow, "email" | "emailVerifiedAt">) => emailRequired() && (!u.email || !u.emailVerifiedAt);
+/**
+ * Buyers never have to confirm anything. Sellers and riders need a confirmed email
+ * (once email sending is set up) — the app asks them for it.
+ */
+export const needsVerification = (u: Pick<UserRow, "role" | "emailVerifiedAt" | "unclaimed">) =>
+  emailReady() && !u.unclaimed && (u.role === "vendor" || u.role === "rider") && !u.emailVerifiedAt;
+/** @deprecated use needsVerification. */
+export const needsEmail = needsVerification;
 
 /**
  * Makes sure no other account holds this address. An address someone typed but
  * never confirmed doesn't count — the person who confirms it first gets it.
  */
-export async function claimEmail(email: string, userId: string | null) {
+export async function claimEmail(email: string, userId: string | null, proven = false) {
   const [other] = await db
-    .select({ id: users.id, verified: users.emailVerifiedAt })
+    .select({ id: users.id, verified: users.emailVerifiedAt, phone: users.phone })
     .from(users)
     .where(and(eq(users.email, email), userId ? ne(users.id, userId) : undefined))
     .limit(1);
   if (!other) return;
   if (other.verified) throw new HttpError(409, "That email is already used by another account", { email: "Already used" });
+  // The email is how that account logs in (no phone): it keeps it. They can use "Forgot password" if it's theirs.
+  if (!other.phone && !proven) throw new HttpError(409, "An account with this email already exists. Try logging in, or use Forgot password.", { email: "Already registered" });
   await db.update(users).set({ email: null, updatedAt: new Date() }).where(eq(users.id, other.id));
 }
 
@@ -71,7 +78,7 @@ export async function verifyCode(userId: string, code: string) {
     await db.update(emailCodes).set({ attempts: row.attempts + 1 }).where(eq(emailCodes.id, row.id));
     throw new HttpError(400, "That code isn't right. Check the email and try again.", { code: "Wrong code" });
   }
-  await claimEmail(row.email, userId);
+  await claimEmail(row.email, userId, true);
   await db.update(emailCodes).set({ usedAt: new Date() }).where(eq(emailCodes.id, row.id));
   const [user] = await db.update(users).set({ email: row.email, emailVerifiedAt: new Date(), updatedAt: new Date() }).where(eq(users.id, userId)).returning();
   return user;

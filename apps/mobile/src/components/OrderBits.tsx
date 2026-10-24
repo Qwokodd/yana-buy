@@ -1,8 +1,8 @@
 import { Pressable, Text, View } from "react-native";
-import { ORDER_STATUS_LABEL, type OrderStatus } from "@yanabuy/shared";
+import { FULFILMENT_LABEL, orderStatusLabel, type Fulfilment, type OrderStatus } from "@yanabuy/shared";
 import { colors, font } from "@/lib/theme";
 
-export function StatusPill({ status }: { status: OrderStatus }) {
+export function StatusPill({ status, fulfilment = "delivery" }: { status: OrderStatus; fulfilment?: Fulfilment }) {
   const tone =
     status === "delivered"
       ? { bg: colors.successTint, fg: colors.success }
@@ -13,7 +13,17 @@ export function StatusPill({ status }: { status: OrderStatus }) {
           : { bg: colors.purpleTint, fg: colors.purple };
   return (
     <View style={{ alignSelf: "flex-start", backgroundColor: tone.bg, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 }}>
-      <Text style={{ fontFamily: font.extrabold, fontSize: 11.5, color: tone.fg }}>{ORDER_STATUS_LABEL[status]}</Text>
+      <Text style={{ fontFamily: font.extrabold, fontSize: 11.5, color: tone.fg }}>{orderStatusLabel(status, fulfilment)}</Text>
+    </View>
+  );
+}
+
+/** "Eat in" / "Pickup" chip (nothing for delivery, the usual case). */
+export function FulfilmentPill({ fulfilment }: { fulfilment: Fulfilment }) {
+  if (fulfilment === "delivery") return null;
+  return (
+    <View style={{ alignSelf: "flex-start", backgroundColor: colors.warnTint, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 }}>
+      <Text style={{ fontFamily: font.extrabold, fontSize: 11.5, color: colors.ink }}>{FULFILMENT_LABEL[fulfilment]}</Text>
     </View>
   );
 }
@@ -26,11 +36,19 @@ const STEPS: { status: OrderStatus; label: string }[] = [
   { status: "delivered", label: "Delivered" },
 ];
 
-export function Progress({ status }: { status: OrderStatus }) {
-  const at = STEPS.findIndex((s) => s.status === status);
+const VISIT_STEPS = (f: Fulfilment): { status: OrderStatus; label: string }[] => [
+  { status: "placed", label: "Placed" },
+  { status: "accepted", label: "Preparing" },
+  { status: "ready", label: f === "eat_in" ? "Ready to serve" : "Ready" },
+  { status: "delivered", label: f === "eat_in" ? "Served" : "Collected" },
+];
+
+export function Progress({ status, fulfilment = "delivery" }: { status: OrderStatus; fulfilment?: Fulfilment }) {
+  const steps = fulfilment === "delivery" ? STEPS : VISIT_STEPS(fulfilment);
+  const at = steps.findIndex((s) => s.status === status);
   return (
-    <View style={{ flexDirection: "row" }} accessibilityLabel={`Progress: ${ORDER_STATUS_LABEL[status]}`}>
-      {STEPS.map((s, i) => (
+    <View style={{ flexDirection: "row" }} accessibilityLabel={`Progress: ${orderStatusLabel(status, fulfilment)}`}>
+      {steps.map((s, i) => (
         <View key={s.status} style={{ flex: 1, alignItems: "center", gap: 6 }}>
           <View style={{ width: "100%", height: 16, alignItems: "center", justifyContent: "center" }}>
             {i > 0 && <View style={{ position: "absolute", right: "50%", left: "-50%", height: 3, backgroundColor: at >= i ? colors.purple : colors.lineStrong }} />}
@@ -52,6 +70,10 @@ export const EVENT_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
   rider_assigned: "A rider was assigned",
   rider_removed: "Rider changed",
+  rider_offered: "Asked a rider to deliver",
+  rider_broadcast: "Riders nearby were told it's ready",
+  rider_declined: "A rider said no",
+  rider_offer_cancelled: "Rider request cancelled",
   dispute_opened: "A problem was reported",
   dispute_response: "The shop answered the problem",
   dispute_resolved: "YanaBuy decided the problem",

@@ -296,7 +296,15 @@ interface ShapedProduct {
   variants: (Omit<ProductVariant, "id"> & { imageSrc: string | null })[];
   price: number;
   compareAtPrice: number | null;
+  /** From "Variant Grams" (Shopify always exports grams there). */
+  weightGrams: number | null;
 }
+
+/** Shopify's "Variant Grams" → whole grams, or null when empty / zero. */
+const gramsOf = (r: Record<string, string | undefined>) => {
+  const g = Math.round(Number(r["Variant Grams"] ?? ""));
+  return Number.isFinite(g) && g > 0 && g <= 1_000_000 ? g : null;
+};
 
 function shapeProducts(rows: Record<string, string>[]): ShapedProduct[] {
   const byHandle = new Map<string, Record<string, string>[]>();
@@ -344,13 +352,14 @@ function shapeProducts(rows: Record<string, string>[]): ShapedProduct[] {
     const variantRows = rs.filter((r) => r["Variant Price"] !== undefined && r["Variant Price"] !== "");
     const simple = variantRows.length <= 1 && (!names[0] || names[0] === "Title") && (!variantRows[0]?.["Option1 Value"] || variantRows[0]["Option1 Value"] === "Default Title");
 
-    const shaped: ShapedProduct = { handle, vendor, name, description, type: first.Type || "", shopifyCategory: first["Product Category"] || "", status, images, options: [], variants: [], price: 0, compareAtPrice: null };
+    const shaped: ShapedProduct = { handle, vendor, name, description, type: first.Type || "", shopifyCategory: first["Product Category"] || "", status, images, options: [], variants: [], price: 0, compareAtPrice: null, weightGrams: null };
 
     if (simple) {
       const v = variantRows[0] ?? first;
       shaped.price = cents(v["Variant Price"]);
       const cmp = cents(v["Variant Compare At Price"]);
       shaped.compareAtPrice = cmp > shaped.price ? cmp : null;
+      shaped.weightGrams = gramsOf(v);
     } else {
       const used = names.map((n, i) => ({ name: n === "Title" ? "Choice" : n || `Option ${i + 1}`, index: i })).filter((o) => variantRows.some((r) => r[`Option${o.index + 1} Value`]));
       if (used.length > MAX_OPTIONS) used.length = MAX_OPTIONS;
@@ -371,7 +380,7 @@ function shapeProducts(rows: Record<string, string>[]): ShapedProduct[] {
         });
         seen.add(key);
         const cmp = cents(r["Variant Compare At Price"]);
-        shaped.variants.push({ values: combo, price, compareAtPrice: cmp > price ? cmp : null, stock: null, image: null, imageSrc: r["Variant Image"] || null });
+        shaped.variants.push({ values: combo, price, compareAtPrice: cmp > price ? cmp : null, stock: null, image: null, imageSrc: r["Variant Image"] || null, weightGrams: gramsOf(r) });
       }
       if (values.some((v) => v.length > MAX_VALUES) || shaped.variants.length > MAX_VARIANTS) {
         warn("Products with too many options (cut to fit)", `${name}: ${shaped.variants.length} combinations`);
@@ -544,7 +553,7 @@ async function main() {
       try {
         ({ options, variants } = normalizeVariants(
           p.options,
-          p.variants.map((x) => ({ values: x.values, price: x.price, compareAtPrice: x.compareAtPrice, stock: null, image: x.imageSrc ? (variantImage.get(x.imageSrc) ?? null) : null })),
+          p.variants.map((x) => ({ values: x.values, price: x.price, compareAtPrice: x.compareAtPrice, stock: null, image: x.imageSrc ? (variantImage.get(x.imageSrc) ?? null) : null, weightGrams: x.weightGrams })),
           before?.variants ?? []
         ));
       } catch (err) {
@@ -561,6 +570,8 @@ async function main() {
         description: p.description,
         price: Math.max(0, p.price),
         compareAtPrice: p.compareAtPrice,
+        // Product weight: the simple product's, or the lightest choice's (choices keep their own).
+        weightGrams: p.weightGrams ?? (p.variants.map((x) => x.weightGrams).filter((g): g is number => !!g).sort((a, b) => a - b)[0] ?? null),
         stock: variants.length ? summarize(variants).stock : null,
         images,
         options,
@@ -730,7 +741,7 @@ async function main() {
     // Accounts made earlier (or just now) pick up any orders with their number.
     if (!DRY) {
       for (const [phone, id] of userByPhone) {
-        if (id === "dry") continue;
+        if (id === "dry" || !phone) continue;
         await db.update(shopifyOrders).set({ userId: id }).where(and(eq(shopifyOrders.phone, phone), isNull(shopifyOrders.userId)));
       }
     }

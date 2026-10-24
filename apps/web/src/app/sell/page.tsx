@@ -16,13 +16,17 @@ import {
   type PrivateUpload,
   type ShopKind,
 } from "@yanabuy/shared";
-import { Alert, Badge, Button, DocumentUpload, Field, ImageUpload, TextInput, fieldErrorsOf, inputClass, messageOf, useAuth } from "@yanabuy/web-kit";
+import { Alert, Badge, Button, DocumentUpload, Field, ImageUpload, TextInput, fieldErrorsOf, inputClass, messageOf, useAuth, ConfirmEmailFirst } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
+import { ShopLocationCard } from "@/components/ShopLocation";
 import { api } from "@/lib/api";
 import { useCountry } from "@/lib/country";
+import { useMode } from "@/lib/mode";
+import { setBrowsing } from "@/lib/workspace";
+import { useRouter } from "next/navigation";
 
 export default function SellPage() {
-  const { user, loading, reload } = useAuth();
+  const { user, loading, reload, setUser } = useAuth();
   const [shop, setShop] = useState<MyShop | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -57,6 +61,7 @@ export default function SellPage() {
             <strong>Please fix this and send it again:</strong> {shop.statusReason}
           </Alert>
         )}
+        {!user.emailVerified && (user.canVerifyBy ?? []).includes("email") && <ConfirmEmailFirst api={api} user={user} who="sellers" onDone={setUser} />}
         <ApplicationForm
           initial={shop ?? null}
           defaultPhone={formatLiberianPhone(user.phone)}
@@ -373,7 +378,7 @@ function ApplicationForm({
                 </label>
               ))}
             </div>
-            <p className="mt-1.5 text-[12.5px] text-muted">Your shop shows to shoppers who pick {countryName(country)}. {country === "US" ? "Mobile money isn't available in the USA — buyers pay on delivery." : ""}</p>
+            <p className="mt-1.5 text-[12.5px] text-muted">Your shop shows to shoppers who pick {countryName(country)}. {country === "US" ? "Mobile money isn't available in the USA — card payment for US buyers is coming soon." : ""}</p>
           </fieldset>
 
           <Field label={kind === "restaurant" ? "Restaurant name" : "Shop name"} error={fields.name}>
@@ -510,6 +515,8 @@ function ApplicationForm({
 // ─── Approved: shop settings ───────────────────────────────────────────────
 
 function ApprovedShop({ shop, onSaved, onFirstVisit }: { shop: MyShop; onSaved: (s: MyShop) => void; onFirstVisit: () => void }) {
+  const router = useRouter();
+  const { setMode } = useMode();
   const [form, setForm] = useState({
     name: shop.name,
     description: shop.description ?? "",
@@ -555,7 +562,7 @@ function ApprovedShop({ shop, onSaved, onFirstVisit }: { shop: MyShop; onSaved: 
       <StatusCard
         shop={shop}
         tone="success"
-        title="Your shop is open"
+        title={shop.kind === "restaurant" ? "My restaurant — open" : "My shop — open"}
         actions={
           <div className="flex flex-wrap gap-2">
             <Link href="/sell/orders" className="inline-flex h-11 items-center rounded-full bg-amber px-6 text-sm font-bold text-ink hover:brightness-95">
@@ -580,14 +587,28 @@ function ApprovedShop({ shop, onSaved, onFirstVisit }: { shop: MyShop; onSaved: 
               {shop.kind === "restaurant" ? "Manage your menu" : "Manage your products"}
             </Link>
             <Link href={`/shop/${shop.slug}`} className="inline-flex h-11 items-center rounded-full border border-line-strong px-6 text-sm font-bold text-purple hover:border-purple">
-              See your shop page
+              {shop.kind === "restaurant" ? "View my restaurant page" : "View my storefront"}
             </Link>
+            <button
+              type="button"
+              onClick={() => {
+                // See the home feed buyers see (Food for restaurants). Logging in again brings them back here.
+                setBrowsing(true);
+                setMode(shop.kind === "restaurant" ? "food" : "goods");
+                router.push("/");
+              }}
+              className="inline-flex h-11 items-center rounded-full border border-line-strong px-6 text-sm font-bold text-purple hover:border-purple"
+            >
+              Browse like a buyer
+            </button>
           </div>
         }
       >
         Add {shop.kind === "restaurant" ? "dishes" : "products"} with photos and prices, and handle your orders. YanaBuy riders pick up and deliver.
       </StatusCard>
 
+      <ShopLocationCard shop={shop} onSaved={onSaved} />
+      {shop.kind === "restaurant" && <OrderWaysCard shop={shop} onSaved={onSaved} />}
       <form onSubmit={save} className="flex flex-col gap-4 rounded-card border border-line bg-white p-6" noValidate>
         <h2 className="font-display text-lg font-extrabold">Shop details</h2>
         {notice && <Alert tone={notice.tone}>{notice.text}</Alert>}
@@ -667,5 +688,47 @@ function ShopKindFields({
         {(id) => <TextInput id={id} value={hours} onChange={(e) => onChange({ hours: e.target.value })} maxLength={120} placeholder="e.g. Mon–Sat 8am–8pm, Sun 12–6pm" />}
       </Field>
     </div>
+  );
+}
+
+/** Restaurants: besides delivery, buyers can order to eat in or to collect — menu price only, no delivery fee. */
+function OrderWaysCard({ shop, onSaved }: { shop: MyShop; onSaved: (s: MyShop) => void }) {
+  const [busy, setBusy] = useState<"eatIn" | "pickup" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function toggle(key: "eatIn" | "pickup") {
+    setBusy(key);
+    setError(null);
+    try {
+      const res = await api.shop.update({ [key]: !shop[key] });
+      onSaved(res.shop);
+    } catch (err) {
+      setError(messageOf(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+  const rows: { key: "eatIn" | "pickup"; title: string; text: string }[] = [
+    { key: "eatIn", title: "Eat in", text: "Buyers order ahead, come to the restaurant and eat there. They pay the menu price at the restaurant — no delivery fee." },
+    { key: "pickup", title: "Pickup", text: "Buyers order and come to collect it. Menu price only — no delivery fee. They pay at the restaurant or online." },
+  ];
+  return (
+    <section className="flex flex-col gap-3 rounded-card border border-line bg-white p-6">
+      <div>
+        <h2 className="font-display text-lg font-extrabold">Ways to order</h2>
+        <p className="text-sm text-muted">Delivery is always on: buyers pay the menu price plus the delivery fee the app works out by distance.</p>
+      </div>
+      {error && <Alert>{error}</Alert>}
+      {rows.map((r) => (
+        <label key={r.key} className={`flex cursor-pointer items-start gap-3 rounded-2xl border-2 p-4 ${shop[r.key] ? "border-purple bg-purple-tint/40" : "border-line"}`}>
+          <input type="checkbox" checked={shop[r.key]} disabled={busy !== null} onChange={() => toggle(r.key)} className="mt-1 h-4 w-4 accent-[rgb(var(--c-purple))]" />
+          <span className="flex-1">
+            <span className="block font-bold">
+              {r.title} {busy === r.key && <span className="text-[12px] font-semibold text-muted">saving…</span>}
+            </span>
+            <span className="text-[13px] text-muted">{r.text}</span>
+          </span>
+        </label>
+      ))}
+    </section>
   );
 }

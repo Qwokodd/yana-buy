@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import type { ProductCard, ProductSort, PublicShop } from "@yanabuy/shared";
+import type { ProductSort, PublicShop } from "@yanabuy/shared";
 import { CategoryTile } from "@/components/Banners";
 import { SearchIcon } from "@/components/Icons";
-import { BackBar, GridPlaceholder, ProductGrid } from "@/components/Products";
-import { Button } from "@/components/ui";
+import { BackBar, GridPlaceholder } from "@/components/Products";
+import { ProductFeed } from "@/components/Feed";
+import { nearBottom, useProductFeed } from "@/lib/feed";
 import { api } from "@/lib/api";
 import { useCategories } from "@/lib/catalog";
 import { useMode } from "@/lib/mode";
@@ -44,33 +45,17 @@ export default function SearchScreen() {
   const [category, setCategory] = useState(params.category ?? "");
   const [sort, setSort] = useState<ProductSort>("best");
   const [china, setChina] = useState(false);
-  const [items, setItems] = useState<ProductCard[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [shops, setShops] = useState<PublicShop[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setItems(null);
-    setPage(1);
-    setError(null);
-    api.public
-      .products({ q: q || undefined, mode, category: category || undefined, sort, china: china || undefined })
-      .then((res) => {
-        setItems(res.items);
-        setTotal(res.total);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't search"));
     if (q) api.public.shops({ q, mode }).then((r) => setShops(r.items)).catch(() => setShops([]));
     else setShops([]);
   }, [q, category, sort, mode, china]);
 
-  async function loadMore() {
-    const next = page + 1;
-    const res = await api.public.products({ q: q || undefined, mode, category: category || undefined, sort, china: china || undefined, page: next });
-    setItems((prev) => [...(prev ?? []), ...res.items]);
-    setPage(next);
-  }
+  // Results keep loading as you scroll — no "Show more".
+  const feed = useProductFeed({ q: q || undefined, mode, category: category || undefined, sort, china: china || undefined });
+  const items = feed.items;
+  const error = items === null ? feed.error : null;
 
   const cat = categories?.find((c) => c.slug === category);
 
@@ -95,7 +80,14 @@ export default function SearchScreen() {
           </View>
         }
       />
-      <ScrollView contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 24, gap: 14 }} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 24, gap: 14 }}
+        keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={200}
+        onScroll={(e) => {
+          if (!feed.done && !feed.error && nearBottom(e)) void feed.loadNext();
+        }}
+      >
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
           <Chip on={!category} label="All" onPress={() => setCategory("")} />
           {(categories ?? []).map((c) => (
@@ -111,7 +103,7 @@ export default function SearchScreen() {
 
         <Text style={{ fontFamily: font.display, fontSize: 20, color: colors.ink }}>
           {q ? `“${q}”` : cat ? cat.name : mode === "goods" ? "Goods & Services" : "Food"}
-          <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{items ? `  ${total} ${total === 1 ? "result" : "results"}` : ""}</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{items ? `  ${feed.total} ${feed.total === 1 ? "result" : "results"}` : ""}</Text>
         </Text>
 
         {shops.length > 0 && (
@@ -142,10 +134,7 @@ export default function SearchScreen() {
         ) : items === null ? (
           <GridPlaceholder />
         ) : items.length ? (
-          <>
-            <ProductGrid products={items} />
-            {items.length < total && <Button title="Show more" variant="outline" onPress={loadMore} />}
-          </>
+          <ProductFeed products={items} done={feed.done} loading={feed.loading} error={feed.error} onRetry={feed.loadNext} />
         ) : (
           <View style={{ backgroundColor: "#fff", borderRadius: 18, borderWidth: 1, borderColor: colors.line, padding: 22, alignItems: "center", gap: 6 }}>
             <Text style={{ fontFamily: font.display, fontSize: 17, color: colors.ink }}>Nothing found</Text>

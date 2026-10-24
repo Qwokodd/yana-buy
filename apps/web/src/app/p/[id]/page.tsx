@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCart } from "@/lib/cart";
 import { useCallback, useEffect, useState } from "react";
-import { defaultPick, findVariant, formatLD, formatLiberianPhone, pickValue, SHOP_KIND_LABEL, valueState, type Product, type ProductCard } from "@yanabuy/shared";
+import { BUY_WORDS, defaultPick, findVariant, formatLD, formatLiberianPhone, pickValue, SHOP_KIND_LABEL, valueState, type Product, type ProductCard } from "@yanabuy/shared";
 import { messageOf } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
 import { discount, ProductGrid } from "@/components/ProductCard";
@@ -14,9 +14,11 @@ import { MessageShopButton } from "@/components/MessageShop";
 import { HeartButton } from "@/components/Heart";
 import { CountryNotice } from "@/components/CountryNotice";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 
 export default function ProductPage() {
   const { id } = useParams<{ id: string }>();
+  const { foodHow } = useMode();
   const [product, setProduct] = useState<Product | null>(null);
   const [more, setMore] = useState<ProductCard[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +42,7 @@ export default function ProductPage() {
         document.title = `${res.product.name} · ${res.product.shop.name}`;
       })
       .catch((err) => setError(messageOf(err)));
-  }, [id]);
+  }, [id, foodHow]);
 
   if (error) {
     return (
@@ -246,24 +248,35 @@ export default function ProductPage() {
                       }}
                       className="h-[52px] flex-1 rounded-full bg-purple text-[15px] font-bold text-white hover:bg-ink"
                     >
-                      Add to cart
+                      {BUY_WORDS[product.kind].add}
                     </button>
                     <button
                       onClick={() => {
                         addToCart();
                         router.push("/cart");
                       }}
-                      className="h-[52px] flex-1 rounded-full bg-amber text-[15px] font-bold text-ink hover:brightness-95"
+                      className={`h-[52px] flex-1 rounded-full text-[15px] font-bold text-ink hover:brightness-95 ${product.kind === "food" ? "bg-orange" : "bg-amber"}`}
                     >
-                      Buy now
+                      {BUY_WORDS[product.kind].now}
                     </button>
                   </div>
                   {added && (
                     <p className="rounded-xl bg-success-tint px-3 py-2 text-sm font-semibold text-success" role="status">
-                      Added to your cart. <Link href="/cart" className="underline">Go to cart</Link>
+                      {BUY_WORDS[product.kind].added}.{" "}
+                      <Link href="/cart" className="underline">
+                        {BUY_WORDS[product.kind].go}
+                      </Link>
                     </p>
                   )}
-                  <p className="text-[12.5px] text-muted">A YanaBuy rider delivers it. Pay cash on delivery, or with mobile money where available.</p>
+                  <p className="text-[12.5px] text-muted">
+                    {product.kind === "food"
+                      ? foodHow === "eat_in"
+                        ? "Eat in: the restaurant's own price, paid at the restaurant."
+                        : foodHow === "pickup"
+                          ? "Pickup: collect it at the restaurant."
+                          : "A YanaBuy rider delivers it. You pay with mobile money when you order."
+                      : "A YanaBuy rider delivers it. You pay with mobile money when you order."}
+                  </p>
                 </>
               ) : (
                 <p className="text-sm font-semibold text-muted">

@@ -1,6 +1,12 @@
+"use client";
+
 import Link from "next/link";
-import { formatLD, type ProductCard as Card } from "@yanabuy/shared";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { BUY_WORDS, formatLD, type ProductCard as Card } from "@yanabuy/shared";
+import { useCart } from "@/lib/cart";
 import { RatingLine } from "./Reviews";
+import { Countdown } from "./Countdown";
 import { HeartButton } from "./Heart";
 
 /** How much cheaper than the old price, e.g. "-25%". */
@@ -29,6 +35,7 @@ export function ProductCard({ product: p }: { product: Card }) {
         <span className="absolute bottom-2.5 right-2.5 z-[1]">
           <HeartButton productId={p.id} name={p.name} />
         </span>
+        {p.saleEndsAt && p.inStock && <Countdown ends={p.saleEndsAt} className="absolute bottom-2.5 left-2.5 z-[1] text-[11px]" />}
         {!p.inStock && (
           <span className="absolute inset-x-0 bottom-0 bg-ink/75 py-1.5 text-center text-[12px] font-bold text-white">Sold out</span>
         )}
@@ -43,11 +50,62 @@ export function ProductCard({ product: p }: { product: Card }) {
           </span>
           {p.compareAtPrice && off && <span className="text-[12px] text-muted line-through">{formatLD(p.compareAtPrice)}</span>}
         </p>
-        <p className="truncate text-[12px] text-muted">
-          {p.shop.name} · {p.shop.city}
+        <p className="flex items-end justify-between gap-2">
+          <span className="min-w-0 truncate text-[12px] text-muted">
+            {p.shop.name} · {p.shop.city}
+          </span>
+          {p.inStock && <AddButton product={p} />}
         </p>
       </div>
     </Link>
+  );
+}
+
+/**
+ * Round "+" on a card: Add to cart (goods) or Add to order (food). Products with choices
+ * (colour, size…) open the product page instead, so the buyer can pick one.
+ */
+function AddButton({ product: p }: { product: Card }) {
+  const cart = useCart();
+  const router = useRouter();
+  const [done, setDone] = useState(false);
+  const words = BUY_WORDS[p.kind];
+  return (
+    <button
+      type="button"
+      aria-label={p.hasOptions ? `Choose options for ${p.name}` : `${words.add}: ${p.name}`}
+      title={p.hasOptions ? "Choose options" : done ? words.added : words.add}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (p.hasOptions) return router.push(`/p/${p.id}`);
+        cart.add(p.id, 1, null);
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+      className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-ink shadow-sm transition hover:scale-105 ${p.kind === "food" ? "bg-orange" : "bg-amber"}`}
+    >
+      {done ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="m5 12.5 4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : p.kind === "food" ? (
+        // A plate with a plus: add to order
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="13" r="7.5" stroke="currentColor" strokeWidth="2" />
+          <path d="M12 10v6M9 13h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          <path d="M8 3.5h8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      ) : (
+        // A cart with a plus: add to cart
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 4h2l1.6 9.6a2 2 0 0 0 2 1.7h7.6a2 2 0 0 0 2-1.6L20 8H9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="9.5" cy="20" r="1.4" fill="currentColor" />
+          <circle cx="16.5" cy="20" r="1.4" fill="currentColor" />
+          <path d="M14 3v6M11 6h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      )}
+    </button>
   );
 }
 

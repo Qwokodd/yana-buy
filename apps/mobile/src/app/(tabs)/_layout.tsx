@@ -22,13 +22,15 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
     const focused = state.index === index;
     const name = route.name as keyof typeof ICONS;
     const Icon = ICONS[name];
+    // Food mode: you build an order, not a cart.
+    const label = name === "cart" && mode === "food" ? "Order" : LABELS[name];
     const color = focused ? colors.purple : colors.muted;
     return (
       <Pressable
         key={route.key}
         accessibilityRole="tab"
         accessibilityState={{ selected: focused }}
-        accessibilityLabel={name === "cart" && count ? `Cart, ${count} items` : LABELS[name]}
+        accessibilityLabel={name === "cart" && count ? `${label}, ${count} items` : label}
         onPress={() => {
           const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
           if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
@@ -43,7 +45,7 @@ function TabBar({ state, navigation }: BottomTabBarProps) {
             </View>
           )}
         </View>
-        <Text style={{ fontFamily: focused ? font.bold : font.semibold, fontSize: 10.5, color }}>{LABELS[name]}</Text>
+        <Text style={{ fontFamily: focused ? font.bold : font.semibold, fontSize: 10.5, color }}>{label}</Text>
       </Pressable>
     );
   };

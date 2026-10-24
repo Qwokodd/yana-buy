@@ -1,16 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { COUNTRY_CODES } from "@yanabuy/shared";
+import { COUNTRY_CODES, validatePricing, type DeliveryPricing } from "@yanabuy/shared";
 import { and, asc, count, eq, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
 import { orders, shops, users } from "../db/schema";
 import { HttpError, parse } from "../lib/http";
 import { audit } from "../lib/audit";
 import { getDelivery, readyMethods, saveDelivery } from "../lib/delivery";
-import { addEvent, buyer, loadOrder, moveOrder, summaries } from "../lib/orders";
+import { getDeliveryPricing, saveDeliveryPricing } from "../lib/delivery-pricing";
+import { addEvent, buyer, loadOrder, moveOrder, summaries, withEarning } from "../lib/orders";
 import { notify } from "../lib/notify";
-import type { DeliverySettings, RiderSummary } from "@yanabuy/shared";
+import { LIVE_MINUTES, orderNumber, type AdminMap, type DeliverySettings, type RiderSummary } from "@yanabuy/shared";
+import { getRiderRadius, saveRiderRadius } from "../lib/locations";
+import { lastLocation } from "../lib/serialize";
+import { gt, isNotNull } from "drizzle-orm";
 
 /** Orders, rider assignment and delivery settings. Mounted under /api/admin. */
 export const adminOrdersRouter = Router();
@@ -28,7 +32,7 @@ adminOrdersRouter.get("/orders", async (req, res) => {
   const { view, q, page } = parse(listSchema, req.query);
   const filters: SQL[] = [];
   if (view === "active") filters.push(inArray(orders.status, [...ACTIVE]));
-  else if (view === "need_rider") filters.push(and(inArray(orders.status, ["accepted", "ready"]), isNull(orders.riderId))!);
+  else if (view === "need_rider") filters.push(and(inArray(orders.status, ["accepted", "ready"]), isNull(orders.riderId), eq(orders.fulfilment, "delivery"))!);
   else if (view !== "all") filters.push(eq(orders.status, view));
   if (q) {
     const digits = q.replace(/\D/g, "");
@@ -55,13 +59,14 @@ adminOrdersRouter.get("/orders", async (req, res) => {
 });
 
 adminOrdersRouter.get("/orders/:id", async (req, res) => {
-  res.json({ order: (await loadOrder(req.params.id)).order });
+  res.json({ order: await withEarning((await loadOrder(req.params.id)).order) });
 });
 
 /** Give an order to a rider (or take it away). Allowed from accepted until it's delivered. */
 adminOrdersRouter.post("/orders/:id/assign", async (req, res) => {
   const { riderId } = parse(z.object({ riderId: z.string().uuid().nullable() }), req.body);
   const { order } = await loadOrder(req.params.id);
+  if (riderId && order.fulfilment !== "delivery") throw new HttpError(400, `This is ${order.fulfilment === "eat_in" ? "an eat-in" : "a pickup"} order — no rider needed`);
   if (!["accepted", "ready", "picked_up"].includes(order.status)) {
     throw new HttpError(400, order.status === "placed" ? "Wait for the shop to accept the order first" : "This order is finished — riders can't be changed");
   }
@@ -72,14 +77,15 @@ adminOrdersRouter.post("/orders/:id/assign", async (req, res) => {
     if (r.status !== "active") throw new HttpError(400, "That rider is blocked");
     riderName = r.fullName;
   }
-  await db.update(orders).set({ riderId, updatedAt: new Date() }).where(eq(orders.id, order.id));
+  // An admin's choice replaces any request the shop sent that wasn't answered.
+  await db.update(orders).set({ riderId, offeredRiderId: null, offeredAt: null, updatedAt: new Date() }).where(eq(orders.id, order.id));
   await addEvent(order.id, riderId ? "rider_assigned" : "rider_removed", req.user!.id, riderName);
   if (riderId) {
     notify([riderId], { type: "order", title: `New delivery ${order.number}`, body: `Pick up from ${order.shop.name}, deliver to ${order.delivery.city}`, link: "/rider" });
     notify([order.buyer.id], { type: "order", title: `${riderName} will deliver ${order.number}`, link: `/orders/${order.id}` });
   }
   await audit(req.user!.id, riderId ? "order.assign" : "order.unassign", { type: "order", id: order.id }, { number: order.number, rider: riderName ?? order.rider?.fullName ?? null });
-  res.json({ order: (await loadOrder(order.id)).order });
+  res.json({ order: await withEarning((await loadOrder(order.id)).order) });
 });
 
 adminOrdersRouter.post("/orders/:id/cancel", async (req, res) => {
@@ -87,7 +93,7 @@ adminOrdersRouter.post("/orders/:id/cancel", async (req, res) => {
   const { order } = await loadOrder(req.params.id);
   await moveOrder(order.id, ["placed", "accepted", "ready", "picked_up"], "cancelled", req.user!.id, { note: reason, cancelledBy: "admin" });
   await audit(req.user!.id, "order.cancel", { type: "order", id: order.id }, { number: order.number, reason });
-  res.json({ order: (await loadOrder(order.id)).order });
+  res.json({ order: await withEarning((await loadOrder(order.id)).order) });
 });
 
 /** Every rider with how busy they are, least busy first. */
@@ -158,6 +164,55 @@ adminOrdersRouter.put("/settings/delivery", async (req, res) => {
   res.json({ delivery });
 });
 
+// ─── Delivery fee by distance and weight, per country ───────────────────────
+const num = z.number().finite();
+const bandsSchema = z.array(z.object({ upTo: num, feeCents: z.number().int() })).max(30, "At most 30 bands");
+const pricingSchema = z.object({
+  mode: z.enum(["area", "distance"]),
+  distance: z.object({
+    unit: z.enum(["km", "mi"]),
+    method: z.enum(["rate", "bands"]),
+    baseCents: z.number().int(),
+    included: num,
+    rateCents: z.number().int(),
+    bands: bandsSchema,
+    roadFactor: num,
+    maxDistance: num.nullable(),
+  }),
+  weight: z.object({
+    enabled: z.boolean(),
+    unit: z.enum(["kg", "lb"]),
+    method: z.enum(["rate", "bands"]),
+    included: num,
+    rateCents: z.number().int(),
+    bands: bandsSchema,
+    maxWeight: num.nullable(),
+    defaultItemWeight: num,
+    applyToRestaurants: z.boolean(),
+    heavyOver: num.nullable(),
+  }),
+  minFeeCents: z.number().int(),
+  maxFeeCents: z.number().int().nullable(),
+  roundToCents: z.number().int(),
+});
+const countryParam = z.enum(COUNTRY_CODES, { errorMap: () => ({ message: "Unknown country" }) });
+
+adminOrdersRouter.get("/delivery-pricing/:country", async (req, res) => {
+  const country = parse(countryParam, req.params.country);
+  res.json({ pricing: await getDeliveryPricing(country) });
+});
+
+adminOrdersRouter.put("/delivery-pricing/:country", async (req, res) => {
+  const country = parse(countryParam, req.params.country);
+  const input: DeliveryPricing = parse(pricingSchema, req.body);
+  const problems = validatePricing(input);
+  if (problems.length) throw new HttpError(400, problems[0], { pricing: problems.join(" · ") });
+  const before = await getDeliveryPricing(country);
+  const pricing = await saveDeliveryPricing(country, input, req.user!.id);
+  await audit(req.user!.id, "delivery_pricing.update", { type: "settings", id: `delivery_pricing:${country}` }, { country, before, after: pricing });
+  res.json({ pricing });
+});
+
 export async function orderStats() {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
@@ -165,7 +220,7 @@ export async function orderStats() {
     .select({
       today: sql<number>`count(*) filter (where ${orders.createdAt} >= ${startOfDay})::int`,
       active: sql<number>`count(*) filter (where ${orders.status} in ('placed','accepted','ready','picked_up'))::int`,
-      needRider: sql<number>`count(*) filter (where ${orders.status} in ('accepted','ready') and ${orders.riderId} is null)::int`,
+      needRider: sql<number>`count(*) filter (where ${orders.status} in ('accepted','ready') and ${orders.riderId} is null and ${orders.fulfilment} = 'delivery')::int`,
       deliveredToday: sql<number>`count(*) filter (where ${orders.status} = 'delivered' and ${orders.deliveredAt} >= ${startOfDay})::int`,
       salesToday: sql<number>`coalesce(sum(${orders.total}) filter (where ${orders.status} = 'delivered' and ${orders.deliveredAt} >= ${startOfDay}), 0)::int`,
     })
@@ -173,3 +228,68 @@ export async function orderStats() {
   return row;
 }
 
+// ─── Live map ───────────────────────────────────────────────────────────────
+
+/** Everyone with a spot on the map: shops, riders (online ones live), buyers' last spots and open orders' pins. */
+adminOrdersRouter.get("/map", async (_req, res) => {
+  const owner = users;
+  const [shopRows, riderRows, buyerRows, orderRows, radiusKm] = await Promise.all([
+    db
+      .select({ s: shops, oLat: owner.lat, oLng: owner.lng })
+      .from(shops)
+      .innerJoin(owner, eq(owner.id, shops.ownerId))
+      .where(inArray(shops.status, ["approved", "pending"]))
+      .limit(2000),
+    db
+      .select({
+        u: users,
+        active: sql<number>`(select count(*)::int from ${orders} o where o.rider_id = ${users.id} and o.status in ('accepted','ready','picked_up'))`,
+      })
+      .from(users)
+      .where(and(eq(users.role, "rider"), eq(users.status, "active"), isNull(users.deletedAt), isNotNull(users.lat)))
+      .limit(2000),
+    db
+      .select()
+      .from(users)
+      .where(and(eq(users.role, "buyer"), isNull(users.deletedAt), isNotNull(users.lat), gt(users.locatedAt, new Date(Date.now() - 90 * 86400_000))))
+      .limit(3000),
+    db
+      .select({ id: orders.id, number: orders.number, status: orders.status, lat: orders.deliveryLat, lng: orders.deliveryLng, shopName: shops.name })
+      .from(orders)
+      .innerJoin(shops, eq(shops.id, orders.shopId))
+      .where(and(inArray(orders.status, [...ACTIVE]), isNotNull(orders.deliveryLat)))
+      .limit(1000),
+    getRiderRadius(),
+  ]);
+  const liveSince = Date.now() - LIVE_MINUTES * 60_000;
+  const map: AdminMap = {
+    shops: shopRows.flatMap(({ s, oLat, oLng }) => {
+      const own = s.lat != null && s.lng != null;
+      const lat = own ? s.lat : oLat;
+      const lng = own ? s.lng : oLng;
+      return lat != null && lng != null ? [{ id: s.id, name: s.name, slug: s.slug, kind: s.kind, city: s.city, status: s.status, location: { lat, lng }, fromOwner: !own }] : [];
+    }),
+    riders: riderRows.flatMap(({ u, active }) => {
+      const location = lastLocation(u);
+      if (!location) return [];
+      return [{ id: u.id, fullName: u.fullName, phone: u.phone, avatarUrl: u.avatarUrl, online: u.riderOnline && new Date(location.at).getTime() > liveSince, location, activeDeliveries: active }];
+    }),
+    buyers: buyerRows.flatMap((u) => {
+      const location = lastLocation(u);
+      return location ? [{ id: u.id, fullName: u.fullName, phone: u.phone, avatarUrl: u.avatarUrl, location }] : [];
+    }),
+    orders: orderRows.flatMap((o) =>
+      o.lat != null && o.lng != null ? [{ id: o.id, number: orderNumber(o.number ?? 0), status: o.status, location: { lat: o.lat, lng: o.lng }, shopName: o.shopName }] : []
+    ),
+    radiusKm,
+  };
+  res.json(map);
+});
+
+/** How far (km) a rider can be from a shop to show as "nearby". */
+adminOrdersRouter.put("/rider-radius", async (req, res) => {
+  const { radiusKm } = parse(z.object({ radiusKm: z.number().min(0.5, "At least 0.5 km").max(100, "100 km at most") }), req.body);
+  await saveRiderRadius(radiusKm, req.user!.id);
+  await audit(req.user!.id, "settings.rider_radius", { type: "settings", id: "rider_radius_km" }, { radiusKm });
+  res.json({ radiusKm });
+});

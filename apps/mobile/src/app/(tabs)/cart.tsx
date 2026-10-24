@@ -3,10 +3,11 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Image } from "expo-image";
-import { formatLD, type Quote } from "@yanabuy/shared";
+import { formatLD, type Quote, BUY_WORDS } from "@yanabuy/shared";
 import { Stepper } from "@/components/OrderBits";
 import { Button, Card, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 import { useAuth } from "@/lib/auth";
 import { useCart } from "@/lib/cart";
 import { colors, font } from "@/lib/theme";
@@ -19,28 +20,31 @@ export default function CartScreen() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const key = JSON.stringify(cart.items);
+  const { foodHow, mode } = useMode();
 
   const load = useCallback(() => {
     if (!cart.items.length) return setQuote(null);
     api.orders
-      .quote(cart.items)
+      // Food: priced for delivery / pickup / eat in as picked (falls back to delivery for goods, or if the restaurant doesn't offer it).
+      .quote(cart.items, { fulfilment: foodHow })
+      .then((res) => (res.quote.fulfilments.includes(foodHow) ? res : api.orders.quote(cart.items)))
       .then((res) => {
         setQuote(res.quote);
         setError(null);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't check prices"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, foodHow]);
   useEffect(load, [load]);
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: colors.ground }} contentContainerStyle={{ paddingTop: insets.top + 18, paddingHorizontal: 18, paddingBottom: 32, gap: 14 }}>
-      <Text style={{ fontFamily: font.display, fontSize: 26, color: colors.ink }}>Your cart</Text>
+      <Text style={{ fontFamily: font.display, fontSize: 26, color: colors.ink }}>{BUY_WORDS[mode].yourBasket}</Text>
       {error && <Notice>{error}</Notice>}
       {!cart.items.length ? (
         <Card style={{ alignItems: "center", gap: 8, paddingVertical: 26 }}>
-          <Text style={{ fontFamily: font.display, fontSize: 18, color: colors.ink }}>Your cart is empty</Text>
-          <Text style={{ fontFamily: font.regular, fontSize: 14, color: colors.muted, textAlign: "center" }}>Find something you like and press “Add to cart”.</Text>
+          <Text style={{ fontFamily: font.display, fontSize: 18, color: colors.ink }}>{BUY_WORDS[mode].yourBasket} is empty</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 14, color: colors.muted, textAlign: "center" }}>Find something you like and press “{BUY_WORDS[mode].add}”.</Text>
           <Button title="Start shopping" onPress={() => router.navigate("/")} style={{ marginTop: 6, alignSelf: "stretch" }} />
         </Card>
       ) : !quote ? (

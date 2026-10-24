@@ -6,7 +6,7 @@ import { EmailConfirm } from "@/components/EmailConfirm";
 import { useAuth } from "@/lib/auth";
 import { colors, font } from "@/lib/theme";
 
-/** "Confirm your email" — every account needs one for order updates and receipts. */
+/** "Confirm your email" — sellers and riders need a confirmed email (buyers never see this screen). */
 export default function VerifyEmail() {
   const { user, setUser, logout } = useAuth();
   const router = useRouter();
@@ -16,10 +16,7 @@ export default function VerifyEmail() {
   }, [user, router]);
   if (!user) return null;
   return (
-    <AuthScreen
-      title={user.email ? "Confirm your email" : "Add your email"}
-      subtitle="We send order updates, messages and receipts by email and text. Enter the 6-digit code we email you."
-    >
+    <AuthScreen title={user.email ? "Confirm your email" : "Add your email"} subtitle="Sellers and riders need a confirmed email. We send orders, payouts and account messages there.">
       <EmailConfirm
         user={user}
         onDone={(u) => {

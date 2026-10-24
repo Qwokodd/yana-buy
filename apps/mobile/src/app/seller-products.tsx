@@ -84,6 +84,7 @@ export default function SellerProducts() {
                 </Text>
                 <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>
                   {p.hasOptions ? `from ${formatLD(p.price)} · ${p.variants.length} choices` : formatLD(p.price)}
+                  {p.buyerPrice !== p.price ? ` · buyers see ${formatLD(p.buyerPrice)}` : ""}
                   {p.stock !== null ? ` · ${p.stock} in stock` : ""}
                 </Text>
                 <View style={{ flexDirection: "row", gap: 6 }}>

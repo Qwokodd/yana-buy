@@ -9,7 +9,7 @@ import { HttpError, parse } from "../lib/http";
 import { bookingOut, lockShop, settingsOf, slotsFor, when } from "../lib/bookings";
 import { notify } from "../lib/notify";
 import { optionalText, phone, requiredText } from "../lib/validation";
-import { requireAuth, requireEmail } from "../middleware/auth";
+import { requireAuth } from "../middleware/auth";
 
 const buyer = alias(users, "booking_buyer");
 const owner = alias(users, "booking_owner");
@@ -47,7 +47,7 @@ const createSchema = z.object({
   note: optionalText(300, "Note"),
 });
 
-bookingsRouter.post("/", requireEmail, async (req, res) => {
+bookingsRouter.post("/", async (req, res) => {
   const input = parse(createSchema, req.body);
   const [shop] = await db.select().from(shops).innerJoin(owner, eq(owner.id, shops.ownerId)).where(eq(shops.id, input.shopId)).limit(1);
   if (!shop || shop.shops.status !== "approved" || shop.booking_owner.status !== "active") throw new HttpError(404, "This shop isn't taking bookings right now");

@@ -4,7 +4,7 @@ import { db } from "../db/client";
 import { notifications, outboundLog, pushTokens, users } from "../db/schema";
 import { env } from "../env";
 import { getBranding } from "./branding";
-import { emailHtml, emailReady, sendEmail, sendSms, smsReady, webLink } from "./outbound";
+import { emailHtml, emailReady, sendEmail, sendSms, smsReady, webLink, SMS_MAX, smsText } from "./outbound";
 
 type Row = typeof notifications.$inferSelect;
 
@@ -21,7 +21,7 @@ export const notificationOut = (n: Row): AppNotification => ({
 const PUSH_URL = "https://exp.host/--/api/v2/push/send";
 
 /** Sends to Expo's push service. Never throws — the bell entry is what matters. */
-async function push(userIds: string[], n: { title: string; body?: string | null; link?: string | null }) {
+async function push(userIds: string[], n: { title: string; body?: string | null; link?: string | null; urgent?: boolean }) {
   if (process.env.NODE_ENV === "test" || process.env.PUSH_DISABLED === "1") return;
   const tokens = await db.select().from(pushTokens).where(inArray(pushTokens.userId, userIds));
   if (!tokens.length) return;
@@ -32,7 +32,7 @@ async function push(userIds: string[], n: { title: string; body?: string | null;
       const res = await fetch(PUSH_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(batch.map((t) => ({ to: t.token, title: n.title, body: n.body ?? undefined, sound: "default", data: { link: n.link ?? null } }))),
+        body: JSON.stringify(batch.map((t) => ({ to: t.token, title: n.title, body: n.body ?? undefined, sound: "default", priority: n.urgent ? "high" : "default", data: { link: n.link ?? null } }))),
         signal: AbortSignal.timeout(10_000),
       });
       const out = (await res.json().catch(() => null)) as { data?: { status: string; details?: { error?: string } }[] } | null;
@@ -45,14 +45,21 @@ async function push(userIds: string[], n: { title: string; body?: string | null;
   }
 }
 
-type Note = { type: NotificationType; title: string; body?: string | null; link?: string | null };
+type Note = { type: NotificationType; title: string; body?: string | null; link?: string | null; urgent?: boolean };
+
+/** The one text message (160 characters) for a notification: the words are shortened, never the link. */
+export function smsFor(appName: string, n: Pick<Note, "title" | "body">, url: string) {
+  const room = SMS_MAX - url.length - 1;
+  const words = smsText(`${appName}: ${n.title}${n.body ? ` - ${n.body}` : ""}`);
+  return `${words.length > room ? `${words.slice(0, Math.max(room - 3, 0))}...` : words} ${url}`;
+}
 
 /** A busy chat sends one email/text per conversation every 10 minutes, not one per message. */
 const QUIET_MINUTES: Partial<Record<NotificationType, number>> = { chat: 10 };
 
 /** Email (confirmed addresses only) and SMS to everyone told. Never throws. Returns how many went out. */
 async function outbound(userIds: string[], n: Note, url: string, want: { email: boolean; sms: boolean } = { email: true, sms: true }) {
-  const none = { emails: 0, sms: 0 };
+  const none = { emails: 0, sms: 0, smsFailed: 0 };
   const doEmail = want.email && emailReady();
   const doSms = want.sms && smsReady();
   if (!doEmail && !doSms) return none;
@@ -75,14 +82,14 @@ async function outbound(userIds: string[], n: Note, url: string, want: { email: 
   const { appName } = await getBranding();
   const html = doEmail ? await emailHtml({ heading: n.title, lines: n.body ? [n.body] : [], button: { label: `Open ${appName}`, url } }) : "";
   const text = `${n.title}${n.body ? `\n${n.body}` : ""}\n${url}`;
-  const sms = `${appName}: ${n.title}${n.body ? ` — ${n.body}` : ""} ${url}`;
-  const out = { emails: 0, sms: 0 };
+  const sms = smsFor(appName, n, url);
+  const out = { emails: 0, sms: 0, smsFailed: 0 };
   // A few at a time, so a big message doesn't open hundreds of connections at once.
   for (let i = 0; i < people.length; i += 20) {
     await Promise.all(
       people.slice(i, i + 20).flatMap((p) => [
         doEmail && p.email && p.verified ? sendEmail(p.email, n.title, html, text).then((ok) => ok && out.emails++) : null,
-        doSms ? sendSms(p.phone, sms).then((ok) => ok && out.sms++) : null,
+        doSms && p.phone ? sendSms(p.phone, sms).then((ok) => (ok ? out.sms++ : out.smsFailed++)) : null,
       ])
     );
   }
@@ -94,7 +101,7 @@ async function outbound(userIds: string[], n: Note, url: string, want: { email: 
  * runs it in the background) and returns how many emails and texts went out.
  */
 export async function deliver(userIds: string[], n: Note, channels: { app: boolean; email: boolean; sms: boolean }) {
-  const totals = { emails: 0, sms: 0 };
+  const totals = { emails: 0, sms: 0, smsFailed: 0 };
   for (let i = 0; i < userIds.length; i += 500) {
     const ids = userIds.slice(i, i + 500);
     if (channels.app) {
@@ -104,6 +111,7 @@ export async function deliver(userIds: string[], n: Note, channels: { app: boole
     const sent = await outbound(ids, n, webLink(n.link), { email: channels.email, sms: channels.sms });
     totals.emails += sent.emails;
     totals.sms += sent.sms;
+    totals.smsFailed += sent.smsFailed;
   }
   return totals;
 }

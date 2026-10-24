@@ -7,7 +7,7 @@ import { HttpError, parse } from "../lib/http";
 import { shopDocuments, shopOut } from "../lib/serialize";
 import { slugify } from "../lib/slug";
 import { imageUrl, optionalText, phone, privateKey, requiredText } from "../lib/validation";
-import { requireAuth, requireEmail } from "../middleware/auth";
+import { requireAuth, requireConfirmedEmail } from "../middleware/auth";
 import type { Request } from "express";
 import { COUNTRY_CODES, type MyShop } from "@yanabuy/shared";
 import { notifyAdmins } from "../lib/notify";
@@ -25,6 +25,9 @@ const profileFields = {
   coverUrl: imageUrl.nullish().transform((v) => v ?? null),
   categoryId: z.string().uuid("Choose what kind of shop it is").nullish().transform((v) => v ?? null),
   hours: optionalText(120, "Opening hours"),
+  /** Restaurants only: also take eat-in / pickup orders. */
+  eatIn: z.boolean().optional(),
+  pickup: z.boolean().optional(),
 };
 
 /** The shop's category must be one of the visible categories for its side (Goods for shops, Food for restaurants). */
@@ -91,7 +94,7 @@ shopRouter.get("/mine", async (req, res) => {
 });
 
 /** Send (or re-send after changes were asked for) a shop or restaurant for review. */
-shopRouter.post("/apply", requireEmail, async (req, res) => {
+shopRouter.post("/apply", requireConfirmedEmail, async (req, res) => {
   const user = req.user!;
   if (user.role === "rider" || user.role === "admin") {
     throw new HttpError(403, "Rider and admin accounts can't open a shop. Use a separate account for selling.");
@@ -117,6 +120,8 @@ shopRouter.post("/apply", requireEmail, async (req, res) => {
 
   const values = {
     ...input,
+    eatIn: input.kind === "restaurant" && !!input.eatIn,
+    pickup: input.kind === "restaurant" && !!input.pickup,
     slug: await uniqueSlug(input.name, existing?.id),
     status: "pending" as const,
     statusReason: null,
@@ -135,12 +140,24 @@ shopRouter.post("/apply", requireEmail, async (req, res) => {
 });
 
 /** Everyday edits once the shop is approved (name, logo, address…). ID documents can't change here. */
+/** Puts the shop's pin on the map (usually "where I am now", from the owner's phone or browser). */
+shopRouter.put("/mine/location", async (req, res) => {
+  const p = parse(z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) }), req.body);
+  const shop = await myShop(req.user!.id);
+  if (!shop) throw new HttpError(404, "You don't have a shop yet");
+  const [updated] = await db.update(shops).set({ lat: p.lat, lng: p.lng, updatedAt: new Date() }).where(eq(shops.id, shop.id)).returning();
+  res.json({ shop: mine(req, updated) });
+});
+
 shopRouter.patch("/mine", async (req, res) => {
   const input = parse(profileSchema, req.body);
   const shop = await myShop(req.user!.id);
   if (!shop) throw new HttpError(404, "You don't have a shop yet");
   if (shop.status !== "approved") throw new HttpError(400, "You can edit your shop once it's approved");
   await checkShopCategory(input.categoryId, shop.kind);
+  if (shop.kind !== "restaurant" && (input.eatIn || input.pickup)) {
+    throw new HttpError(400, "Only restaurants can take eat-in or pickup orders");
+  }
   const slug = input.name && input.name !== shop.name ? await uniqueSlug(input.name, shop.id) : shop.slug;
   const [updated] = await db
     .update(shops)

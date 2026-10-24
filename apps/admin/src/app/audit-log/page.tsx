@@ -100,7 +100,7 @@ function describe(e: AuditEntry) {
     case "sourcing.status":
       return `marked ${d.number} as ${SOURCING_STATUS_LABEL[d.status as SourcingStatus]?.toLowerCase() ?? d.status}`;
     case "settings.finance":
-      return `set commission to ${d.goodsCommission}% (shops) and ${d.foodCommission}% (restaurants)`;
+      return `set commission to ${d.goodsCommission}% (shops), ${d.foodCommission}% (restaurant delivery) and ${d.pickupCommission ?? "–"}% (restaurant pickup)`;
     case "category.create":
       return `added the category “${d.name}” (${d.kind === "food" ? "Food" : "Goods & Services"})`;
     case "category.update":

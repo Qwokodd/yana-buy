@@ -1,13 +1,19 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { Api, User } from "@yanabuy/shared";
+import { needsCode, type Api, type AuthResponse, type LoginChallenge, type User } from "@yanabuy/shared";
+
+/** Either logged in, or a 6-digit code is needed first (show <LoginCode>). */
+export type LoginStep = { user: User; challenge?: undefined; welcomeBack?: boolean } | { user?: undefined; challenge: LoginChallenge };
 
 interface AuthValue {
   user: User | null;
   loading: boolean;
-  login: (phone: string, password: string) => Promise<User>;
-  register: (input: { fullName: string; phone: string; password: string; email: string; city?: string }) => Promise<User>;
+  /** `login` is the phone number or email they typed. */
+  login: (login: string, password: string) => Promise<LoginStep>;
+  /** Finishes a login (or an old-store account claim) with the 6-digit code. */
+  verifyCode: (input: { challengeId: string; code: string; trustDevice?: boolean }) => Promise<AuthResponse>;
+  register: (input: { fullName: string; phone?: string; email?: string; password: string; city?: string }) => Promise<LoginStep>;
   logout: () => Promise<void>;
   setUser: (user: User) => void;
   reload: () => Promise<void>;
@@ -55,19 +61,30 @@ export function AuthProvider({
     () => ({
       user,
       loading,
-      async login(phone, password) {
-        const res = await api.auth.login({ phone, password });
+      async login(login, password) {
+        const res = await api.auth.login({ login, password });
+        if (needsCode(res)) return { challenge: res };
         if (allow && !allow(res.user)) {
           await api.auth.logout();
           throw new Error(deniedMessage);
         }
         setUser(res.user);
-        return res.user;
+        return { user: res.user };
+      },
+      async verifyCode(input) {
+        const res = await api.auth.verifyLogin(input);
+        if (allow && !allow(res.user)) {
+          await api.auth.logout();
+          throw new Error(deniedMessage);
+        }
+        setUser(res.user);
+        return res;
       },
       async register(input) {
         const res = await api.auth.register(input);
+        if (needsCode(res)) return { challenge: res };
         setUser(res.user);
-        return res.user;
+        return { user: res.user, welcomeBack: res.welcomeBack };
       },
       async logout() {
         await api.auth.logout();

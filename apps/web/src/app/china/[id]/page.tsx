@@ -16,7 +16,7 @@ export default function ChinaRequestPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [r, setR] = useState<SourcingRequest | null>(null);
-  const [methods, setMethods] = useState<PaymentMethod[]>(["cod"]);
+  const [methods, setMethods] = useState<PaymentMethod[]>([]);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -152,7 +152,7 @@ function QuoteCard({ request: r, methods, onAccepted }: { request: SourcingReque
   const { user } = useAuth();
   const [accepting, setAccepting] = useState(false);
   const [form, setForm] = useState({ name: user?.fullName ?? "", phone: user ? formatLiberianPhone(user.phone) : "", city: user?.city ?? "", address: "" });
-  const [method, setMethod] = useState<PaymentMethod>("cod");
+  const [method, setMethod] = useState<PaymentMethod>(methods[0] ?? "mtn_momo");
   const [payPhone, setPayPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

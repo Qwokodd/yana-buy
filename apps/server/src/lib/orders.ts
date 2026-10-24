@@ -1,14 +1,16 @@
 import { and, asc, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import { DISPUTE_DAYS, orderNumber, type Order, type OrderStatus, type OrderSummary, type PersonContact } from "@yanabuy/shared";
+import { bookingNumber, DISPUTE_DAYS, orderNumber, type Order, type OrderStatus, type OrderSummary, type PersonContact } from "@yanabuy/shared";
 import { db } from "../db/client";
-import { disputes, orderEvents, orderItems, orders, products, reviews, shops, users, type OrderRow, type ShopRow, type UserRow } from "../db/schema";
+import { bookings, disputes, orderEvents, orderItems, orders, products, reviews, shops, users, type OrderRow, type ShopRow, type UserRow } from "../db/schema";
 import { HttpError } from "./http";
 import { notify, notifyAdmins } from "./notify";
 import { disputeOut } from "./disputes";
+import { shopPoint } from "./locations";
 
 export const buyer = alias(users, "order_buyer");
 export const rider = alias(users, "order_rider");
+export const offered = alias(users, "order_offered_rider");
 
 type Db = typeof db;
 export type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -20,7 +22,8 @@ const selection = {
   order: orders,
   shop: shops,
   buyer: { id: buyer.id, fullName: buyer.fullName, phone: buyer.phone, avatarUrl: buyer.avatarUrl },
-  rider: { id: rider.id, fullName: rider.fullName, phone: rider.phone, avatarUrl: rider.avatarUrl },
+  rider: { id: rider.id, fullName: rider.fullName, phone: rider.phone, avatarUrl: rider.avatarUrl, lat: rider.lat, lng: rider.lng, locatedAt: rider.locatedAt },
+  offered: { id: offered.id, fullName: offered.fullName, phone: offered.phone, avatarUrl: offered.avatarUrl },
 };
 
 export const selectOrders = () =>
@@ -29,9 +32,17 @@ export const selectOrders = () =>
     .from(orders)
     .innerJoin(shops, eq(shops.id, orders.shopId))
     .innerJoin(buyer, eq(buyer.id, orders.buyerId))
-    .leftJoin(rider, eq(rider.id, orders.riderId));
+    .leftJoin(rider, eq(rider.id, orders.riderId))
+    .leftJoin(offered, eq(offered.id, orders.offeredRiderId));
 
-type Row = { order: OrderRow; shop: ShopRow; buyer: PersonContact; rider: { id: string | null; fullName: string | null; phone: string | null; avatarUrl: string | null } | null };
+type Loose = { id: string | null; fullName: string | null; phone: string | null; avatarUrl: string | null };
+type Row = {
+  order: OrderRow;
+  shop: ShopRow;
+  buyer: PersonContact;
+  rider: (Loose & { lat: number | null; lng: number | null; locatedAt: Date | null }) | null;
+  offered: Loose | null;
+};
 
 function summary(r: Row, items: { image: string | null; quantity: number }[], disputeStatus: OrderSummary["disputeStatus"] = null): OrderSummary {
   const o = r.order;
@@ -48,7 +59,11 @@ function summary(r: Row, items: { image: string | null; quantity: number }[], di
     shop: { id: r.shop.id, name: r.shop.name, slug: r.shop.slug, kind: r.shop.kind, city: r.shop.city, logoUrl: r.shop.logoUrl, country: r.shop.country },
     createdAt: o.createdAt.toISOString(),
     rider: contact(r.rider as PersonContact | null),
+    offer: r.offered?.id && o.offeredAt ? { rider: contact(r.offered as PersonContact)!, at: o.offeredAt.toISOString() } : null,
     disputeStatus,
+    fulfilment: o.fulfilment,
+    arriveAt: o.arriveAt?.toISOString() ?? null,
+    partySize: o.partySize,
   };
 }
 
@@ -83,7 +98,7 @@ export async function loadOrder(id: string, extra?: SQL): Promise<{ row: Row; or
     .where(and(eq(orders.id, id), extra))
     .limit(1)) as Row[];
   if (!row) throw new HttpError(404, "Order not found");
-  const [items, events, [dispute], reviewed] = await Promise.all([
+  const [items, events, [dispute], reviewed, [booking]] = await Promise.all([
     db.select().from(orderItems).where(eq(orderItems.orderId, id)),
     db
       .select({ status: orderEvents.status, note: orderEvents.note, createdAt: orderEvents.createdAt, by: users.fullName })
@@ -93,6 +108,7 @@ export async function loadOrder(id: string, extra?: SQL): Promise<{ row: Row; or
       .orderBy(asc(orderEvents.createdAt)),
     db.select().from(disputes).where(eq(disputes.orderId, id)).limit(1),
     db.select({ productId: reviews.productId }).from(reviews).where(eq(reviews.orderId, id)),
+    row.order.bookingId ? db.select().from(bookings).where(eq(bookings.id, row.order.bookingId)).limit(1) : Promise.resolve([]),
   ]);
   const o = row.order;
   const iso = (d: Date | null) => d?.toISOString() ?? null;
@@ -100,10 +116,11 @@ export async function loadOrder(id: string, extra?: SQL): Promise<{ row: Row; or
     ...summary(row, items, dispute?.status ?? null),
     subtotal: o.subtotal,
     deliveryFee: o.deliveryFee,
+    deliveryFeeBreakdown: o.deliveryFeeBreakdown ?? null,
     discount: o.discount,
     discountCode: o.discountCode,
     items: items.map((i) => ({ id: i.id, productId: i.productId, variantId: i.variantId, variantLabel: i.variantLabel, name: i.name, image: i.image, price: i.price, quantity: i.quantity })),
-    delivery: { name: o.deliveryName, phone: o.deliveryPhone, city: o.deliveryCity, address: o.deliveryAddress, note: o.note, area: o.deliveryArea },
+    delivery: { name: o.deliveryName, phone: o.deliveryPhone, city: o.deliveryCity, address: o.deliveryAddress, note: o.note, area: o.deliveryArea, lat: o.deliveryLat, lng: o.deliveryLng },
     shop: {
       id: row.shop.id,
       name: row.shop.name,
@@ -114,8 +131,14 @@ export async function loadOrder(id: string, extra?: SQL): Promise<{ row: Row; or
       country: row.shop.country,
       phone: row.shop.phone,
       address: row.shop.address,
+      location: await shopPoint(row.shop),
     },
     buyer: row.buyer,
+    riderLocation:
+      row.rider?.id && row.rider.lat != null && row.rider.lng != null && row.rider.locatedAt
+        ? { lat: row.rider.lat, lng: row.rider.lng, at: row.rider.locatedAt.toISOString() }
+        : null,
+    declinedRiderIds: o.declinedRiderIds ?? [],
     cancelReason: o.cancelReason,
     cancelledBy: o.cancelledBy,
     events: events.map((e) => ({ status: e.status, note: e.note, createdAt: e.createdAt.toISOString(), by: e.by })),
@@ -128,6 +151,9 @@ export async function loadOrder(id: string, extra?: SQL): Promise<{ row: Row; or
     reviewedProductIds: reviewed.map((r) => r.productId),
     disputeUntil:
       o.status === "delivered" && o.deliveredAt ? new Date(o.deliveredAt.getTime() + DISPUTE_DAYS * 86400_000).toISOString() : null,
+    booking: booking
+      ? { id: booking.id, number: bookingNumber(booking.number ?? 0), status: booking.status, startsAt: booking.startsAt.toISOString(), partySize: booking.partySize }
+      : null,
   };
   return { row, order };
 }
@@ -181,7 +207,7 @@ export async function moveOrder(
 /** Bell + push for the people an order step matters to. */
 async function tellAboutOrder(id: string, to: OrderStatus, opts: { note?: string | null; cancelledBy?: "buyer" | "seller" | "admin" }) {
   const [o] = await db
-    .select({ id: orders.id, number: orders.number, buyerId: orders.buyerId, riderId: orders.riderId, shopName: shops.name, ownerId: shops.ownerId })
+    .select({ id: orders.id, number: orders.number, buyerId: orders.buyerId, riderId: orders.riderId, shopName: shops.name, ownerId: shops.ownerId, fulfilment: orders.fulfilment })
     .from(orders)
     .innerJoin(shops, eq(shops.id, orders.shopId))
     .where(eq(orders.id, id))
@@ -190,10 +216,26 @@ async function tellAboutOrder(id: string, to: OrderStatus, opts: { note?: string
   const no = orderNumber(o.number ?? 0);
   const buyer = { type: "order" as const, link: `/orders/${o.id}` };
   const seller = { type: "order" as const, link: "/sell/orders" };
+  // Eat in / pickup: no rider — the buyer comes to the restaurant.
+  if (o.fulfilment !== "delivery") {
+    const eatIn = o.fulfilment === "eat_in";
+    if (to === "placed") notify([o.ownerId], { ...seller, title: `New ${eatIn ? "eat-in" : "pickup"} order ${no}`, body: "Accept it and start cooking." });
+    else if (to === "accepted") notify([o.buyerId], { ...buyer, title: `${o.shopName} accepted ${no}`, body: "They're preparing your food." });
+    else if (to === "ready") notify([o.buyerId], { ...buyer, title: `${no} is ready`, body: eatIn ? "Your food is ready to be served." : "Come and collect it." });
+    else if (to === "delivered") {
+      notify([o.buyerId], { ...buyer, title: eatIn ? `Enjoy your meal — ${no}` : `${no} collected`, body: "How was it? Rate your food." });
+      notify([o.ownerId], { ...seller, title: `${no} is done`, body: "It's in your earnings.", link: "/sell/earnings" });
+    } else if (to === "cancelled") {
+      const why = opts.note ? ` — ${opts.note}` : "";
+      if (opts.cancelledBy !== "buyer") notify([o.buyerId], { ...buyer, title: `${no} was cancelled`, body: `${o.shopName}${why}` });
+      if (opts.cancelledBy !== "seller") notify([o.ownerId], { ...seller, title: `${no} was cancelled`, body: opts.cancelledBy === "buyer" ? `The buyer cancelled${why}` : `Cancelled by YanaBuy${why}` });
+    }
+    return;
+  }
   if (to === "placed") notify([o.ownerId], { ...seller, title: `New order ${no}`, body: "Accept it so the rider can come for it." });
   else if (to === "accepted") {
     notify([o.buyerId], { ...buyer, title: `${o.shopName} accepted ${no}`, body: "They're getting it ready." });
-    notifyAdmins({ title: `${no} needs a rider`, body: `${o.shopName} accepted it`, path: "/orders" });
+    notifyAdmins({ title: `${no} accepted`, body: `${o.shopName} is picking a rider (you can assign one too)`, path: "/orders" });
   }
   else if (to === "ready") notify([o.buyerId], { ...buyer, title: `${no} is packed`, body: "A rider will pick it up soon." });
   else if (to === "picked_up") notify([o.buyerId], { ...buyer, title: `${no} is on the way`, body: "Your rider has picked it up." });
@@ -251,4 +293,29 @@ async function restock(tx: Tx, orderId: string) {
 
 export async function addEvent(orderId: string, status: string, byUserId: string, note?: string | null) {
   await db.insert(orderEvents).values({ orderId, status, byUserId, note: note ?? null });
+}
+
+/**
+ * The shop's view of an order: its own prices on the items, the items subtotal at those prices,
+ * and what it earns. (Buyers only ever see the prices with YanaBuy's commission already in them.)
+ */
+export async function forSeller(order: Order): Promise<Order> {
+  const [rows, [o]] = await Promise.all([
+    db.select({ id: orderItems.id, sellerPrice: orderItems.sellerPrice }).from(orderItems).where(eq(orderItems.orderId, order.id)),
+    db.select({ sellerEarning: orders.sellerEarning }).from(orders).where(eq(orders.id, order.id)).limit(1),
+  ]);
+  const own = new Map(rows.map((r) => [r.id, r.sellerPrice]));
+  const onTop = rows.length > 0 && rows.every((r) => r.sellerPrice !== null);
+  return {
+    ...order,
+    items: order.items.map((i) => ({ ...i, price: own.get(i.id) ?? i.price })),
+    subtotal: onTop ? order.items.reduce((n, i) => n + (own.get(i.id) ?? i.price) * i.quantity, 0) : order.subtotal,
+    sellerEarning: o?.sellerEarning ?? null,
+  };
+}
+
+/** The admin's view: buyer prices as charged, plus what the shop earns (the rest of the items total is YanaBuy's commission). */
+export async function withEarning(order: Order): Promise<Order> {
+  const [o] = await db.select({ sellerEarning: orders.sellerEarning }).from(orders).where(eq(orders.id, order.id)).limit(1);
+  return { ...order, sellerEarning: o?.sellerEarning ?? null };
 }

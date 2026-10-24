@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { ApiError, formatLD, formatLiberianPhone, parseLD, PAYOUT_METHOD_LABEL, type PayoutMethod, type Wallet, type WalletEntry } from "@yanabuy/shared";
+import { ApiError, formatLD, formatLiberianPhone, parseLD, PAYOUT_METHOD_LABEL, PAYOUT_SCHEDULE_LABEL, type PayoutMethod, type Wallet, type WalletEntry } from "@yanabuy/shared";
 import { BackBar } from "@/components/Products";
 import { Button, Card, Field, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -48,7 +48,8 @@ export default function SellerEarnings() {
               <Stat label="Earned this month" value={wallet.earnedThisMonth} />
             </View>
             <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>
-              You get the item price minus YanaBuy&apos;s {wallet.commission}% commission when an order is delivered.
+              You get your full price for every item once the order is delivered. YanaBuy adds its {wallet.commission}% on top of your price for buyers, and delivery fees go to the riders. YanaBuy pays you{" "}
+              {wallet.payoutSchedule === "on_request" ? "when you ask" : PAYOUT_SCHEDULE_LABEL[wallet.payoutSchedule].toLowerCase()} to your mobile money.
             </Text>
 
             <PayoutRequest

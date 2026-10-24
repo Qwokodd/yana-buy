@@ -6,14 +6,19 @@ import { alias } from "drizzle-orm/pg-core";
 import { db } from "../db/client";
 import { categories, notifications, products, pushTokens, shopifyOrders, shops, users, wishlistItems } from "../db/schema";
 import { productCard, productColumns } from "../lib/products";
+import { buyerPrice, foodHowOf } from "../lib/finance";
 import { markRead, notificationOut } from "../lib/notify";
 import { shopifyOrderOut } from "../lib/shopify";
 import { HttpError, parse } from "../lib/http";
-import { publicUser } from "../lib/serialize";
+import { userWithShop } from "../lib/serialize";
 import { fullName, imageUrl, optionalText, password } from "../lib/validation";
 import { requireAuth } from "../middleware/auth";
 import { claimEmail, sendCode, verifyCode } from "../lib/email-codes";
-import { email as emailField } from "../lib/validation";
+import { email as emailField, phone as phoneField } from "../lib/validation";
+import { phoneFree, sendPhoneCode, verifyPhoneCode } from "../lib/phone-codes";
+import { forgetDevices } from "../lib/login-codes";
+import { linkShopifyOrders } from "../lib/shopify";
+import { saveLocation } from "../lib/locations";
 
 export const meRouter = Router();
 
@@ -23,11 +28,20 @@ const liveProductFor = (o: typeof owners) =>
   and(eq(products.status, "approved"), eq(products.hidden, false), eq(shops.status, "approved"), eq(o.status, "active"));
 meRouter.use(requireAuth);
 
-meRouter.get("/", (req, res) => {
-  res.json({ user: publicUser(req.user!) });
+meRouter.get("/", async (req, res) => {
+  res.json({ user: await userWithShop(req.user!) });
 });
 
 /** Orders this person placed on the old Shopify store (read only). */
+const pointSchema = z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180) });
+
+/** The phone or browser sends where the person is now (riders: every ~30 s while online). */
+meRouter.put("/location", async (req, res) => {
+  const p = parse(pointSchema, req.body);
+  await saveLocation(req.user!.id, p);
+  res.json({ ok: true });
+});
+
 meRouter.get("/shopify-orders", async (req, res) => {
   const rows = await db.select().from(shopifyOrders).where(eq(shopifyOrders.userId, req.user!.id)).orderBy(desc(shopifyOrders.placedAt)).limit(200);
   // Buyers see what they bought, not admin-only notes.
@@ -52,7 +66,7 @@ meRouter.patch("/", async (req, res) => {
     .set({ ...input, updatedAt: new Date() })
     .where(eq(users.id, req.user!.id))
     .returning();
-  res.json({ user: publicUser(user) });
+  res.json({ user: await userWithShop(user) });
 });
 
 /**
@@ -77,7 +91,31 @@ meRouter.post("/email", async (req, res) => {
 meRouter.post("/email/verify", async (req, res) => {
   const { code } = parse(z.object({ code: z.string({ required_error: "Enter the code" }).trim().regex(/^\d{6}$/, "Enter the 6-digit code") }), req.body);
   const user = await verifyCode(req.user!.id, code);
-  res.json({ user: publicUser(user) });
+  res.json({ user: await userWithShop(user) });
+});
+
+/**
+ * Phone: text a 6-digit code to a number (a new one, or the current one again),
+ * then confirm it. The number on the account (which they log in with) only changes once confirmed.
+ */
+meRouter.post("/phone", async (req, res) => {
+  const { phone } = parse(z.object({ phone: phoneField.optional() }), req.body ?? {});
+  const me = req.user!;
+  const target = phone ?? me.phone;
+  if (!target) throw new HttpError(400, "Enter your phone number", { phone: "Enter your phone number" });
+  if (target === me.phone && me.phoneVerifiedAt) throw new HttpError(400, "That number is already confirmed", { phone: "Already confirmed" });
+  await phoneFree(target, me.id);
+  const out = await sendPhoneCode(me, target);
+  res.json({ ...out, phone: target });
+});
+
+meRouter.post("/phone/verify", async (req, res) => {
+  const { code } = parse(z.object({ code: z.string({ required_error: "Enter the code" }).trim().regex(/^\d{6}$/, "Enter the 6-digit code") }), req.body);
+  const before = req.user!.phone;
+  const user = await verifyPhoneCode(req.user!.id, code);
+  // A new number: any orders from the old store under it now show up too.
+  if (user.phone && user.phone !== before) await linkShopifyOrders(user.id, user.phone);
+  res.json({ user: await userWithShop(user) });
 });
 
 const passwordSchema = z.object({
@@ -94,6 +132,8 @@ meRouter.post("/password", async (req, res) => {
     .update(users)
     .set({ passwordHash: await bcrypt.hash(input.newPassword, 12), updatedAt: new Date() })
     .where(eq(users.id, req.user!.id));
+  // Trusted devices need the code again after a password change.
+  await forgetDevices(req.user!.id);
   res.status(204).send();
 });
 
@@ -111,7 +151,7 @@ meRouter.get("/wishlist", async (req, res) => {
     .where(and(eq(wishlistItems.userId, req.user!.id), liveProductFor(owners)))
     .orderBy(desc(wishlistItems.createdAt))
     .limit(200);
-  res.json({ items: rows.map((r) => ({ product: productCard(r), priceAtSave: r.saved.priceAtSave, savedAt: r.saved.createdAt.toISOString() })) });
+  res.json({ items: rows.map((r) => ({ product: productCard(r, foodHowOf(req)), priceAtSave: buyerPrice(r.saved.priceAtSave, r.product.kind, foodHowOf(req)), savedAt: r.saved.createdAt.toISOString() })) });
 });
 
 /** Just the ids, so hearts can show filled on product cards. */

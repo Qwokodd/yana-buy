@@ -50,6 +50,12 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 160
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "YanaBuy uses your location so shops and riders can find you for deliveries, and so riders can see orders near them."
+        }
       ]
     ],
     "experiments": {

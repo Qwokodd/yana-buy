@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { buyerPrice } from "./finance";
 import { orderNumber, type ChatMessage, type ConversationSummary } from "@yanabuy/shared";
 import { db } from "../db/client";
 import { notify } from "./notify";
@@ -71,7 +72,7 @@ export async function loadMessages(r: ConversationJoin, viewer: { side: "buyer" 
   const rows = await db
     .select({
       m: messages,
-      product: { id: products.id, name: products.name, images: products.images, price: products.price },
+      product: { id: products.id, name: products.name, images: products.images, price: products.price, kind: products.kind },
       order: { id: orders.id, number: orders.number },
     })
     .from(messages)
@@ -88,7 +89,7 @@ export function messageOut(
   m: MessageRow,
   r: ConversationJoin,
   side: "buyer" | "shop" | "admin",
-  product?: { id: string | null; name: string | null; images: string[] | null; price: number | null } | null,
+  product?: { id: string | null; name: string | null; images: string[] | null; price: number | null; kind?: "goods" | "food" | null } | null,
   order?: { id: string | null; number: number | null } | null
 ): ChatMessage {
   return {
@@ -98,7 +99,7 @@ export function messageOut(
     senderName: m.sender === "buyer" ? r.buyer.fullName : m.sender === "shop" ? r.shop.name : "YanaBuy",
     body: m.body,
     imageUrl: m.imageUrl,
-    product: product?.id ? { id: product.id, name: product.name ?? "", image: product.images?.[0] ?? null, price: product.price ?? 0 } : null,
+    product: product?.id ? { id: product.id, name: product.name ?? "", image: product.images?.[0] ?? null, price: product.price != null && product.kind ? buyerPrice(product.price, product.kind) : 0 } : null,
     order: order?.id ? { id: order.id, number: orderNumber(order.number ?? 0) } : null,
     createdAt: m.createdAt.toISOString(),
   };
@@ -125,7 +126,7 @@ export async function postMessage(
     })
     .where(eq(conversations.id, r.c.id));
   const [product] = input.productId
-    ? await db.select({ id: products.id, name: products.name, images: products.images, price: products.price }).from(products).where(eq(products.id, input.productId))
+    ? await db.select({ id: products.id, name: products.name, images: products.images, price: products.price, kind: products.kind }).from(products).where(eq(products.id, input.productId))
     : [null];
   const [order] = input.orderId ? await db.select({ id: orders.id, number: orders.number }).from(orders).where(eq(orders.id, input.orderId)) : [null];
   // Tell the other side (the shop when the buyer writes; the buyer when the shop or YanaBuy writes).

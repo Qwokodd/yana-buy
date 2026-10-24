@@ -109,7 +109,7 @@ export function RiderApplicationsBrowser({ queue = false, onCount }: { queue?: b
           {selected ? (
             <RiderPanel key={selected} id={selected} onChanged={changed} />
           ) : (
-            <EmptyPanel>{queue ? "When someone applies to deliver, their details and ID photos show up here." : "Pick an application to see it."}</EmptyPanel>
+            <EmptyPanel>{queue ? "When someone applies to deliver, their details show up here." : "Pick an application to see it."}</EmptyPanel>
           )}
         </div>
       </div>
@@ -117,18 +117,19 @@ export function RiderApplicationsBrowser({ queue = false, onCount }: { queue?: b
   );
 }
 
+// Riders no longer send ID photos — they confirm their email instead.
 const CHECKS = [
-  "The ID photo is clear and every corner is visible",
-  "The face in the selfie matches the ID",
-  "The name on the ID matches the account name",
-  "The licence is valid and matches the ID (motorbike, keke, car)",
+  "Their email is confirmed and the name looks real",
+  "The city and areas make sense for deliveries",
+  "The emergency contact looks reachable (call them if unsure)",
+  "The plate number is filled in (motorbike, keke, car)",
 ];
 
 const QUICK_REASONS = [
-  "The ID photo is blurry — please take a clearer one",
-  "The selfie doesn't match the ID",
-  "The driver's licence is missing or expired",
   "Please add a reachable emergency contact",
+  "Please list the areas you can cover",
+  "Please check your plate number",
+  "Please use your full real name on your account",
 ];
 
 function RiderPanel({ id, onChanged }: { id: string; onChanged: (a: AdminRiderApplication, done: string) => void }) {
@@ -214,6 +215,9 @@ function RiderPanel({ id, onChanged }: { id: string; onChanged: (a: AdminRiderAp
         <Row label="Emergency">
           {a.emergencyName} · {formatLiberianPhone(a.emergencyPhone)}
         </Row>
+        <Row label="Email">
+          {a.user.email ? `${a.user.email}${a.user.emailVerified ? " ✓ confirmed" : " (not confirmed)"}` : "None"}
+        </Row>
         <Row label="Account">
           <Link href={`/people?id=${a.user.id}`} className="text-purple hover:underline">
             Open in Buyers &amp; accounts
@@ -221,9 +225,10 @@ function RiderPanel({ id, onChanged }: { id: string; onChanged: (a: AdminRiderAp
         </Row>
       </dl>
 
+      {a.documents && (
       <div className="flex flex-col gap-2">
         <p className="text-[13px] font-bold">
-          ID check <span className="font-semibold text-muted">· {ID_TYPE_LABEL[a.documents.idType]}</span>
+          ID check (sent before ID photos were dropped) <span className="font-semibold text-muted">· {ID_TYPE_LABEL[a.documents.idType]}</span>
         </p>
         <div className="grid grid-cols-2 gap-2">
           <DocPhoto label="Front of ID" url={a.documents.idFrontUrl} />
@@ -237,6 +242,7 @@ function RiderPanel({ id, onChanged }: { id: string; onChanged: (a: AdminRiderAp
         </div>
         <p className="text-[11.5px] text-muted">These photos are private. Links stop working after an hour — reload to see them again.</p>
       </div>
+      )}
 
       {a.status === "pending" && (
         <div className="flex flex-col gap-3 border-t border-line pt-4">

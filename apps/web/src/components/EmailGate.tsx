@@ -13,7 +13,7 @@ export function EmailGate() {
   const path = usePathname();
   const router = useRouter();
   useEffect(() => {
-    if (user?.needsEmail && !OPEN.some((p) => path.startsWith(p))) {
+    if (user?.needsVerification && !OPEN.some((p) => path.startsWith(p))) {
       router.replace(`/verify-email?next=${encodeURIComponent(path + window.location.search)}`);
     }
   }, [user, path, router]);

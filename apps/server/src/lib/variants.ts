@@ -44,6 +44,8 @@ export const variantsSchema = z
       compareAtPrice: cents("old price").min(1).nullish().transform((v) => v ?? null),
       stock: z.number().int("Stock must be a whole number").min(0, "Stock can't be below zero").max(100_000).nullish().transform((v) => v ?? null),
       image: imageUrl.nullish().transform((v) => v ?? null),
+      /** Weight of one, in grams (null = the product's weight). */
+      weightGrams: z.number().int().min(1).max(1_000_000).nullish(),
     })
   )
   .max(MAX_VARIANTS, `Up to ${MAX_VARIANTS} combinations`);
@@ -90,7 +92,7 @@ export function normalizeVariants(
       throw new HttpError(400, `${variantLabel(v.values)}: the old price must be higher than the price`, { variants: "Old price too low" });
     }
     const id = (v.id && oldIds.has(v.id) && v.id) || oldByKey.get(k) || randomUUID().slice(0, 13);
-    return { id, values: v.values, price: v.price, compareAtPrice: v.compareAtPrice, stock: v.stock, image: v.image };
+    return { id, values: v.values, price: v.price, compareAtPrice: v.compareAtPrice, stock: v.stock, image: v.image, weightGrams: v.weightGrams ?? null };
   });
   return { options, variants: out };
 }

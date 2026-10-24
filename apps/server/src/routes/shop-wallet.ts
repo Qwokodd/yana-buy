@@ -45,6 +45,7 @@ shopWalletRouter.get("/", async (req, res) => {
         : null,
     minPayout: f.minPayout,
     commission: shop.kind === "restaurant" ? f.foodCommission : f.goodsCommission,
+    payoutSchedule: shop.payoutSchedule,
     entries,
     payouts: list,
   };

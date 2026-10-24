@@ -25,6 +25,16 @@ const schema = z.object({
   MTN_MOMO_TARGET_ENV: z.string().default("sandbox"),
   /** Sandbox only accepts EUR; live Liberia is LRD. */
   MTN_MOMO_CURRENCY: z.string().default("USD"),
+  // MTN Mobile Money (Disbursements) — sending payouts to shops and riders. Its own key, user and API key;
+  // uses the same MTN_MOMO_BASE_URL, MTN_MOMO_TARGET_ENV and MTN_MOMO_CURRENCY. Leave empty to keep the Send button off.
+  /**
+   * Live only: where MTN reports finished payments, e.g. https://api.yanabuy.com/api/payments/mtn/callback.
+   * Must match the callback host registered in MTN's partner portal. Leave empty in the sandbox.
+   */
+  MTN_MOMO_CALLBACK_URL: z.string().optional(),
+  MTN_DISB_SUBSCRIPTION_KEY: z.string().optional(),
+  MTN_DISB_API_USER: z.string().optional(),
+  MTN_DISB_API_KEY: z.string().optional(),
 
   /** The website's address, for links in emails and texts (e.g. https://yanabuy.com). */
   WEB_URL: z.string().default("http://localhost:3000"),
@@ -50,6 +60,12 @@ const schema = z.object({
 
   /** Testing only: write emails and texts to this file instead of sending them. */
   OUTBOX_FILE: z.string().optional(),
+
+  /**
+   * Login codes (a 6-digit code by text or email after the password). "on" by default;
+   * they only kick in once email or SMS is switched on. "off" turns them off (e.g. for test servers).
+   */
+  LOGIN_CODES: z.enum(["on", "off"]).default("on"),
 });
 
 const parsed = schema.safeParse(process.env);

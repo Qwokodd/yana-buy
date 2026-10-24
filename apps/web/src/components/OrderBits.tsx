@@ -1,4 +1,4 @@
-import { ORDER_STATUS_LABEL, type OrderStatus } from "@yanabuy/shared";
+import { FULFILMENT_LABEL, orderStatusLabel, type Fulfilment, type OrderStatus } from "@yanabuy/shared";
 import { Badge } from "@yanabuy/web-kit";
 
 const TONE: Record<OrderStatus, "warn" | "purple" | "success" | "danger"> = {
@@ -11,8 +11,14 @@ const TONE: Record<OrderStatus, "warn" | "purple" | "success" | "danger"> = {
   cancelled: "danger",
 };
 
-export function OrderStatusBadge({ status }: { status: OrderStatus }) {
-  return <Badge tone={TONE[status]}>{ORDER_STATUS_LABEL[status]}</Badge>;
+export function OrderStatusBadge({ status, fulfilment = "delivery" }: { status: OrderStatus; fulfilment?: Fulfilment }) {
+  return <Badge tone={TONE[status]}>{orderStatusLabel(status, fulfilment)}</Badge>;
+}
+
+/** "Eat in" / "Pickup" chip (nothing for delivery, the usual case). */
+export function FulfilmentBadge({ fulfilment }: { fulfilment: Fulfilment }) {
+  if (fulfilment === "delivery") return null;
+  return <span className="rounded-full bg-orange-tint px-2.5 py-0.5 text-[12px] font-bold text-ink">{FULFILMENT_LABEL[fulfilment]}</span>;
 }
 
 const STEPS: { status: OrderStatus; label: string }[] = [
@@ -23,12 +29,20 @@ const STEPS: { status: OrderStatus; label: string }[] = [
   { status: "delivered", label: "Delivered" },
 ];
 
-/** Five dots joined by a line, filled up to where the order is now. */
-export function OrderProgress({ status }: { status: OrderStatus }) {
-  const at = STEPS.findIndex((s) => s.status === status);
+const VISIT_STEPS = (f: Fulfilment): { status: OrderStatus; label: string }[] => [
+  { status: "placed", label: "Placed" },
+  { status: "accepted", label: "Preparing" },
+  { status: "ready", label: f === "eat_in" ? "Ready to serve" : "Ready to collect" },
+  { status: "delivered", label: f === "eat_in" ? "Served" : "Collected" },
+];
+
+/** Dots joined by a line, filled up to where the order is now. */
+export function OrderProgress({ status, fulfilment = "delivery" }: { status: OrderStatus; fulfilment?: Fulfilment }) {
+  const steps = fulfilment === "delivery" ? STEPS : VISIT_STEPS(fulfilment);
+  const at = steps.findIndex((s) => s.status === status);
   return (
-    <ol className="grid grid-cols-5 gap-1" aria-label="Order progress">
-      {STEPS.map((s, i) => {
+    <ol className={`grid ${steps.length === 5 ? "grid-cols-5" : "grid-cols-4"} gap-1`} aria-label="Order progress">
+      {steps.map((s, i) => {
         const done = at >= i;
         return (
           <li key={s.status} className="flex flex-col items-center gap-1.5 text-center" aria-current={i === at ? "step" : undefined}>
@@ -53,6 +67,10 @@ export const EVENT_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
   rider_assigned: "A rider was assigned",
   rider_removed: "Rider changed",
+  rider_offered: "Asked a rider to deliver",
+  rider_broadcast: "Riders nearby were told it's ready",
+  rider_declined: "A rider said no",
+  rider_offer_cancelled: "Rider request cancelled",
   dispute_opened: "A problem was reported",
   dispute_response: "The shop answered the problem",
   dispute_resolved: "YanaBuy decided the problem",

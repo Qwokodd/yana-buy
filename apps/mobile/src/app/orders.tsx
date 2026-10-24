@@ -53,7 +53,7 @@ export default function Orders() {
                 <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>
                   {o.itemCount} {o.itemCount === 1 ? "item" : "items"} · {formatLD(o.total)}
                 </Text>
-                <StatusPill status={o.status} />
+                <StatusPill status={o.status} fulfilment={o.fulfilment} />
               </View>
             </Card>
           </Pressable>

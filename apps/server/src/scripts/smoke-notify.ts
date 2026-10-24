@@ -34,6 +34,16 @@ async function call(method: string, p: string, body?: unknown, token?: string) {
   return { status: res.status, data: data as any };
 }
 
+/** Logs in; when a login code is asked for, reads it from the outbox file and finishes. */
+async function login(body: Record<string, unknown>) {
+  const read = () => (fs.existsSync(OUTBOX) ? fs.readFileSync(OUTBOX, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { text: string }) : []);
+  const before = read().length;
+  const r = await call("POST", "/api/auth/login", body);
+  if (r.status !== 200 || !r.data.needsCode) return r;
+  const msg = read().slice(before).reverse().find((m) => /login code is (\d{6})/.test(m.text));
+  return call("POST", "/api/auth/login/verify", { challengeId: r.data.challengeId, code: /login code is (\d{6})/.exec(msg?.text ?? "")?.[1] ?? "000000" });
+}
+
 const PNG = Uint8Array.from(
   atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="),
   (c) => c.charCodeAt(0)
@@ -45,7 +55,7 @@ function photos(count: number) {
 }
 
 const n = String(Date.now()).slice(-7);
-let r = await call("POST", "/api/auth/login", { phone: "0770000001", password: "adminpass123" });
+let r = await login({ phone: "0770000001", password: "adminpass123" });
 const admin = r.data.accessToken as string;
 
 async function person(prefix: string, name: string) {
@@ -97,20 +107,21 @@ async function confirm(token: string, email: string) {
   return r;
 }
 
-// ─── Sign-up needs an email ───────────────────────────────────────────────
-r = await call("POST", "/api/auth/register", { fullName: "No Email", phone: `086${n}`, password: "password123" });
-check(r.status === 400 && r.data.fields?.email, "signing up without an email is refused");
+// ─── Sign-up: phone needed, email optional, nothing to confirm ────────────
+r = await call("POST", "/api/auth/register", { fullName: "No Phone", email: `nophone${n}@test.yanabuy.com`, password: "password123" });
+check(r.status === 400 && r.data.fields?.phone, "signing up without a phone number is refused");
 r = await call("POST", "/api/auth/register", { fullName: "Bad Email", phone: `086${n}`, email: "not-an-email", password: "password123" });
 check(r.status === 400 && r.data.fields?.email, "a bad email is refused");
 
 markNow();
 const bEmail = mailOf("buyer");
 r = await call("POST", "/api/auth/register", { fullName: "Mail Buyer", phone: `086${n}`, email: bEmail.toUpperCase(), password: "password123" });
-check(r.status === 201 && r.data.user.email === bEmail && r.data.user.emailVerified === false && r.data.user.needsEmail === true, "sign-up saves the email (lower-case), not confirmed yet", r.data);
+check(r.status === 201 && r.data.user.email === bEmail && r.data.user.emailVerified === false && r.data.user.needsVerification === false, "a buyer signs up (email saved lower-case) and needs nothing confirmed", r.data);
 const buyer = { token: r.data.accessToken as string, id: r.data.user.id as string };
-const codeMail = since().find((s) => s.channel === "email" && s.to === bEmail);
-check(codeMail && /\d{6}/.test(codeMail.subject ?? ""), "a 6-digit code is emailed straight away", since());
+check(!since().some((s) => s.to === bEmail || s.to === `+23186${n}`), "no codes are sent at sign-up", since());
 
+r = await call("POST", "/api/me/email", {}, buyer.token);
+check(r.status === 200 && lastCode(bEmail), "a code is emailed when they ask to confirm their email");
 r = await call("POST", "/api/me/email", {}, buyer.token);
 check(r.status === 429, "codes can't be asked for again within a minute");
 r = await call("POST", "/api/me/email/verify", { code: "000000" === lastCode(bEmail) ? "111111" : "000000" }, buyer.token);
@@ -118,23 +129,28 @@ check(r.status === 400 && r.data.fields?.code, "a wrong code is refused");
 r = await call("PATCH", "/api/me", { email: "sneaky@test.yanabuy.com" }, buyer.token);
 check(r.status === 400, "the email can't be changed without the code check");
 
-// ─── Unconfirmed: can browse, can't check out ─────────────────────────────
-const seller = await sellerWithProducts("87", "store", `Mail Shop ${n}`, [{ name: `Mail Lappa ${n}`, price: 1500, stock: 9 }]);
-r = await call("GET", "/api/me", undefined, buyer.token);
-check(r.status === 200, "an unconfirmed account can still log in and browse");
-const item = { productId: seller.products[0] ?? "00000000-0000-0000-0000-000000000000", quantity: 1 };
+// ─── Sellers must confirm their email before applying ────────────────────
+const noMail = await person("85", "Unconfirmed Seller");
+const nmUp = await call("POST", "/api/uploads/private", photos(2), noMail.token);
+r = await call("POST", "/api/shop/apply", { kind: "store", name: `No Mail Shop ${n}`, phone: `085${n}`, city: "Monrovia", address: "Broad Street", idType: "passport", idFrontKey: nmUp.data.files[0].key, selfieKey: nmUp.data.files[1].key }, noMail.token);
+check(r.status === 403 && r.data.fields?.email === "needs_email", "a seller with no confirmed email can't open a shop", r.data);
+r = await call("POST", "/api/rider-application", { vehicle: "on_foot", city: "Monrovia", areas: "Waterside", emergencyName: "Mary", emergencyPhone: "0886123457" }, noMail.token);
+check(r.status === 403 && r.data.fields?.email === "needs_email", "…nor apply to be a rider");
+const sEmail = mailOf("seller");
+const seller = await sellerWithProducts("87", "store", `Mail Shop ${n}`, [{ name: `Mail Lappa ${n}`, price: 1500, stock: 9 }], async (token) => {
+  const c = await confirm(token, sEmail);
+  check(c.status === 200 && c.data.user.email === sEmail && c.data.user.emailVerified, "seller confirms their email");
+});
+check(seller.products.length === 1, "with a confirmed email the shop opens", seller);
+
+// ─── Buyers order without confirming anything ────────────────────────────
+const item = { productId: seller.products[0], quantity: 1 };
 const delivery = { name: "Mail Buyer", phone: `086${n}`, city: "Monrovia", address: "Broad Street" };
 r = await call("POST", "/api/orders", { items: [item], delivery, paymentMethod: "cod" }, buyer.token);
-check(r.status === 403 && r.data.fields?.email === "needs_email", "checkout asks for a confirmed email first", r.data);
+check(r.status === 201, "a buyer with nothing confirmed can check out", r.data);
 
 r = await call("POST", "/api/me/email/verify", { code: lastCode(bEmail) }, buyer.token);
-check(r.status === 200 && r.data.user.emailVerified && !r.data.user.needsEmail, "the right code confirms the email");
-
-// ─── Sellers must confirm before applying ─────────────────────────────────
-check(seller.products.length === 0, "a seller with no confirmed email can't open a shop", seller);
-const sEmail = mailOf("seller");
-r = await confirm(seller.token, sEmail);
-check(r.status === 200 && r.data.user.email === sEmail, "seller confirms their email");
+check(r.status === 200 && r.data.user.emailVerified, "the right code confirms the buyer's email (optional for buyers)");
 
 // Admin confirms theirs so they get alerts.
 const aEmail = mailOf("admin");
@@ -206,7 +222,7 @@ const squatter = await call("POST", "/api/auth/register", { fullName: "Typo Pers
 check(squatter.status === 201, "someone signs up with an address they don't own");
 r = await call("POST", "/api/auth/register", { fullName: "Real Owner", phone: `083${n}`, email: mailOf("real-owner"), password: "password123" });
 check(r.status === 201, "the real owner can still sign up with it (it wasn't confirmed)", r.data);
-r = await call("POST", "/api/me/email/verify", { code: lastCode(mailOf("real-owner")) }, r.data.accessToken);
+r = await confirm(r.data.accessToken, mailOf("real-owner"));
 check(r.status === 200, "and confirm it");
 
 console.log(`\n${passed} checks passed`);

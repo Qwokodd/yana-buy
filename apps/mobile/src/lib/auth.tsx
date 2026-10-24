@@ -1,13 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { User } from "@yanabuy/shared";
+import { needsCode, type AuthResponse, type LoginChallenge, type User } from "@yanabuy/shared";
 import { api } from "./api";
 import { unregisterPush } from "./push";
 
 interface AuthValue {
   user: User | null;
   loading: boolean;
-  login: (phone: string, password: string) => Promise<void>;
-  register: (input: { fullName: string; phone: string; password: string; email: string; city?: string }) => Promise<void>;
+  /** `login` is the phone number or email they typed. A challenge = show the code screen next. */
+  login: (login: string, password: string) => Promise<LoginChallenge | null>;
+  /** Finishes a login (or an old-store account claim) with the 6-digit code. */
+  verifyCode: (input: { challengeId: string; code: string; trustDevice?: boolean }) => Promise<AuthResponse>;
+  register: (input: { fullName: string; phone?: string; email?: string; password: string; city?: string }) => Promise<LoginChallenge | null>;
   logout: () => Promise<void>;
   setUser: (u: User) => void;
   /** Fetch the account again (e.g. after a shop is approved and the role changes). */
@@ -36,11 +39,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading,
-      async login(phone, password) {
-        setUser((await api.auth.login({ phone, password })).user);
+      async login(login, password) {
+        const res = await api.auth.login({ login, password });
+        if (needsCode(res)) return res;
+        setUser(res.user);
+        return null;
+      },
+      async verifyCode(input) {
+        const res = await api.auth.verifyLogin(input);
+        setUser(res.user);
+        return res;
       },
       async register(input) {
-        setUser((await api.auth.register(input)).user);
+        const res = await api.auth.register(input);
+        if (needsCode(res)) return res;
+        setUser(res.user);
+        return null;
       },
       async logout() {
         await unregisterPush();

@@ -238,8 +238,10 @@ adminTrustRouter.post("/disputes/:id/resolve", async (req, res) => {
   if (input.outcome === "refund_full" && input.refundAmount !== o.total) {
     throw new HttpError(400, `A full refund is the order total, ${formatLD(o.total)}`, { refundAmount: `Must be ${formatLD(o.total)}` });
   }
-  if (input.sellerCharge > o.subtotal) {
-    throw new HttpError(400, `The seller can be charged at most the item total (${formatLD(o.subtotal)})`, { sellerCharge: `At most ${formatLD(o.subtotal)}` });
+  // The most a seller can be charged back is what they earned on it (their own prices, not the commission on top).
+  const sellerMax = o.sellerEarning ?? o.subtotal;
+  if (input.sellerCharge > sellerMax) {
+    throw new HttpError(400, `The seller can be charged at most what they earned on this order (${formatLD(sellerMax)})`, { sellerCharge: `At most ${formatLD(sellerMax)}` });
   }
   const number = `DP-${d.number}`;
   await db.transaction(async (tx) => {

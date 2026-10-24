@@ -3,11 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { formatLD, type Quote } from "@yanabuy/shared";
+import { formatLD, type Quote, BUY_WORDS } from "@yanabuy/shared";
 import { Alert, Button, messageOf, useAuth } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
 import { useCart } from "@/lib/cart";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 
 export default function CartPage() {
   const cart = useCart();
@@ -16,6 +17,7 @@ export default function CartPage() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const key = JSON.stringify(cart.items);
+  const { foodHow, mode } = useMode();
 
   // Ask the server for today's prices whenever the cart changes.
   useEffect(() => {
@@ -25,14 +27,16 @@ export default function CartPage() {
     }
     let live = true;
     api.orders
-      .quote(cart.items)
+      // Food: priced for delivery / pickup / eat in as picked (falls back to delivery for goods, or if the restaurant doesn't offer it).
+      .quote(cart.items, { fulfilment: foodHow })
+      .then((res) => (res.quote.fulfilments.includes(foodHow) ? res : api.orders.quote(cart.items)))
       .then((res) => live && (setQuote(res.quote), setError(null)))
       .catch((err) => live && setError(messageOf(err)));
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, foodHow]);
 
   const empty = cart.items.length === 0;
 
@@ -40,13 +44,13 @@ export default function CartPage() {
     <>
       <SiteHeader />
       <main className="mx-auto flex max-w-[1100px] flex-col gap-5 px-4 py-8 sm:px-8">
-        <h1 className="font-display text-[28px] font-extrabold">Your cart</h1>
+        <h1 className="font-display text-[28px] font-extrabold">{BUY_WORDS[mode].yourBasket}</h1>
         {error && <Alert>{error}</Alert>}
 
         {empty ? (
           <div className="rounded-card border border-line bg-white px-6 py-14 text-center">
-            <p className="font-display text-lg font-extrabold">Your cart is empty</p>
-            <p className="mt-1 text-sm text-muted">Find something you like and press “Add to cart”.</p>
+            <p className="font-display text-lg font-extrabold">{BUY_WORDS[mode].yourBasket} is empty</p>
+            <p className="mt-1 text-sm text-muted">Find something you like and press “{BUY_WORDS[mode].add}”.</p>
             <Link href="/" className="mt-5 inline-flex h-11 items-center rounded-full bg-purple px-6 text-sm font-bold text-white hover:bg-ink">
               Start shopping
             </Link>

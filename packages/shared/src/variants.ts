@@ -1,3 +1,4 @@
+import { gramsToUnit, unitToGrams, type WeightUnit } from "./delivery-fee";
 import { parseLD } from "./money";
 import { variantLabel, type MyProduct, type ProductInput, type ProductOption, type ProductVariant } from "./types";
 
@@ -63,6 +64,8 @@ export interface RowDraft {
   price: string;
   compareAtPrice: string;
   stock: string;
+  /** Weight of one in the seller's unit (kg or lb). Empty = the product's weight. */
+  weight?: string;
 }
 export interface OptionsDraft {
   options: OptionDraft[];
@@ -81,16 +84,27 @@ export const rowKey = (values: string[]) => values.map((v) => v.toLowerCase()).j
  */
 export function defaultRow(d: OptionsDraft, values: string[]): RowDraft {
   const isNew = !d.initial || values.some((v, i) => !d.initial![i]?.includes(v.toLowerCase()));
-  return { on: isNew, price: "", compareAtPrice: "", stock: "" };
+  return { on: isNew, price: "", compareAtPrice: "", stock: "", weight: "" };
 }
 
 export const rowOf = (d: OptionsDraft, values: string[]): RowDraft => d.rows[rowKey(values)] ?? defaultRow(d, values);
 
-export function draftFrom(product: MyProduct | null): OptionsDraft {
+/** A weight in grams as the seller types it in their unit ("1.5"), or "". */
+export const weightToInput = (grams: number | null | undefined, unit: WeightUnit) => (grams ? String(Math.round(gramsToUnit(grams, unit) * 100) / 100) : "");
+
+export function draftFrom(product: MyProduct | null, weightUnit: WeightUnit = "kg"): OptionsDraft {
   if (!product?.variants.length) return { options: [], rows: {} };
   const rows: Record<string, RowDraft> = {};
   for (const v of product.variants) {
-    rows[rowKey(v.values)] = { id: v.id, image: v.image, on: true, price: toInput(v.price), compareAtPrice: toInput(v.compareAtPrice), stock: v.stock === null ? "" : String(v.stock) };
+    rows[rowKey(v.values)] = {
+      id: v.id,
+      image: v.image,
+      on: true,
+      price: toInput(v.price),
+      compareAtPrice: toInput(v.compareAtPrice),
+      stock: v.stock === null ? "" : String(v.stock),
+      weight: weightToInput(v.weightGrams, weightUnit),
+    };
   }
   return {
     options: product.options.map((o) => ({ name: o.name, values: o.values.join(", ") })),
@@ -101,8 +115,8 @@ export function draftFrom(product: MyProduct | null): OptionsDraft {
 
 export const cleanOptions = (d: OptionsDraft) => d.options.map((o) => ({ name: o.name.trim(), values: split(o.values) })).filter((o) => o.name || o.values.length);
 
-/** Turns the draft into what the API wants, or field errors. */
-export function collectOptions(d: OptionsDraft): { value: Pick<ProductInput, "options" | "variants">; error: string | null } {
+/** Turns the draft into what the API wants, or field errors. Weights are read in `weightUnit`. */
+export function collectOptions(d: OptionsDraft, weightUnit: WeightUnit = "kg"): { value: Pick<ProductInput, "options" | "variants">; error: string | null } {
   const options = cleanOptions(d);
   if (!options.length) return { value: { options: [], variants: [] }, error: null };
   if (options.some((o) => !o.name)) return { value: {}, error: "Give every option a name, e.g. Colour" };
@@ -117,7 +131,10 @@ export function collectOptions(d: OptionsDraft): { value: Pick<ProductInput, "op
     if (r.compareAtPrice.trim() && (!compare || compare <= price)) return { value: {}, error: `${variantLabel(values)}: the old price must be higher than the price` };
     const stock = r.stock.trim() === "" ? null : Number(r.stock);
     if (stock !== null && (!Number.isInteger(stock) || stock < 0)) return { value: {}, error: `${variantLabel(values)}: stock must be a whole number` };
-    variants.push({ id: r.id, values, price, compareAtPrice: compare, stock, image: r.image ?? null });
+    const w = (r.weight ?? "").trim() === "" ? null : Number(r.weight);
+    const weightGrams = w === null ? null : Math.round(unitToGrams(w, weightUnit));
+    if (w !== null && (!Number.isFinite(w) || weightGrams! < 1 || weightGrams! > 1_000_000)) return { value: {}, error: `${variantLabel(values)}: enter the weight in ${weightUnit}, e.g. 1.5, or leave it empty` };
+    variants.push({ id: r.id, values, price, compareAtPrice: compare, stock, image: r.image ?? null, weightGrams });
   }
   if (!variants.length) return { value: {}, error: "Tick at least one combination you sell" };
   return { value: { options, variants }, error: null };

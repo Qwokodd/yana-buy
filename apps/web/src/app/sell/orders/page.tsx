@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { formatLD, formatLiberianPhone, type Order, type OrderSummary } from "@yanabuy/shared";
+import { formatLD, formatLiberianPhone, FULFILMENT_LABEL, type Order, type OrderSummary } from "@yanabuy/shared";
+
+/** "Thu 22 Oct, 18:30" — Liberia time (UTC). */
+const visitTime = (iso: string) => new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 import { Alert, Button, messageOf, useAuth } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
-import { OrderStatusBadge } from "@/components/OrderBits";
+import { FulfilmentBadge, OrderStatusBadge } from "@/components/OrderBits";
 import { DisputeCard } from "@/components/OrderTrust";
 import { api } from "@/lib/api";
+import { OrderMap } from "@/components/OrderMap";
+import { RiderPicker } from "@/components/RiderPicker";
 
 type View = "active" | "done";
 
@@ -54,7 +59,7 @@ export default function SellerOrdersPage() {
             ← My shop
           </Link>
           <h1 className="font-display text-[28px] font-extrabold">Shop orders</h1>
-          <p className="text-sm text-muted">Accept new orders quickly, pack them, and mark them ready — a YanaBuy rider picks them up.</p>
+          <p className="text-sm text-muted">Accept new orders quickly, pick a rider near you, pack them and mark them ready.</p>
         </div>
         <div className="flex gap-2" role="group" aria-label="Show">
           {(["active", "done"] as const).map((v) => (
@@ -82,7 +87,7 @@ export default function SellerOrdersPage() {
                 key={o.id}
                 id={o.id}
                 onClose={() => setOpenId(null)}
-                onChanged={(u) => setItems((prev) => (prev ?? []).map((x) => (x.id === u.id ? { ...x, status: u.status, rider: u.rider } : x)))}
+                onChanged={(u) => setItems((prev) => (prev ?? []).map((x) => (x.id === u.id ? { ...x, status: u.status, rider: u.rider, offer: u.offer } : x)))}
               />
             ) : (
               <button key={o.id} onClick={() => setOpenId(o.id)} className="flex items-center gap-4 rounded-card border border-line bg-white p-4 text-left hover:border-purple">
@@ -97,10 +102,12 @@ export default function SellerOrdersPage() {
                   <span className="text-sm text-soft">
                     {o.itemCount} {o.itemCount === 1 ? "item" : "items"} · {formatLD(o.total)} ·{" "}
                     {new Date(o.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    {o.fulfilment !== "delivery" && o.arriveAt ? ` · arriving ${visitTime(o.arriveAt)}` : ""}
                   </span>
                 </span>
+                <FulfilmentBadge fulfilment={o.fulfilment} />
                 {o.disputeStatus === "open" && <span className="rounded-full bg-danger-tint px-2.5 py-0.5 text-[12px] font-bold text-danger">Problem reported</span>}
-                <OrderStatusBadge status={o.status} />
+                <OrderStatusBadge status={o.status} fulfilment={o.fulfilment} />
               </button>
             )
           )}
@@ -118,11 +125,23 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
   const [reason, setReason] = useState("");
 
   useEffect(() => {
-    api.shop
-      .order(id)
-      .then((res) => setOrder(res.order))
-      .catch((err) => setError(messageOf(err)));
+    const get = () =>
+      api.shop
+        .order(id)
+        .then((res) => setOrder(res.order))
+        .catch((err) => setError(messageOf(err)));
+    get();
+    // Keeps the rider's answer and live position fresh.
+    const t = setInterval(get, 20000);
+    return () => clearInterval(t);
   }, [id]);
+
+  const [paidHere, setPaidHere] = useState(false);
+  const visit = order?.fulfilment !== "delivery";
+  const change = (o: Order) => {
+    setOrder(o);
+    onChanged(o);
+  };
 
   async function run(action: () => Promise<{ order: Order }>) {
     setBusy(true);
@@ -146,7 +165,8 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
       <div className="flex items-center justify-between gap-2">
         <p className="font-display text-xl font-extrabold">{order.number}</p>
         <div className="flex items-center gap-3">
-          <OrderStatusBadge status={order.status} />
+          <FulfilmentBadge fulfilment={order.fulfilment} />
+          <OrderStatusBadge status={order.status} fulfilment={order.fulfilment} />
           <button onClick={onClose} className="text-sm font-bold text-muted hover:text-ink" aria-label="Close">
             ✕
           </button>
@@ -167,8 +187,34 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
       </ul>
       <p className="border-t border-line pt-2 text-sm">
         Items {formatLD(order.subtotal)} ·{" "}
-        {order.paymentMethod === "cod" ? `the buyer pays the rider ${formatLD(order.total)} in cash` : `paid online (${formatLD(order.total)})`}
+        {order.paymentMethod === "cod"
+          ? visit
+            ? `the buyer pays you ${formatLD(order.total)} at the restaurant (no delivery fee)`
+            : `the buyer pays the rider ${formatLD(order.total)} in cash`
+          : `paid online (${formatLD(order.total)})`}
       </p>
+      {order.sellerEarning != null && (
+        <p className="text-sm font-bold text-success">
+          You earn {formatLD(order.sellerEarning)} — your full prices{visit && order.paymentMethod === "cod" ? "; YanaBuy's commission (the rest of what the buyer pays you) comes off your balance" : ""}.
+        </p>
+      )}
+      {visit ? (
+        <div className="rounded-2xl bg-orange-tint p-3 text-sm">
+          <p className="font-bold">
+            {FULFILMENT_LABEL[order.fulfilment]} · {order.delivery.name} · {formatLiberianPhone(order.delivery.phone)}
+          </p>
+          <p>
+            {order.arriveAt ? `Arriving ${visitTime(order.arriveAt)}` : "Coming as soon as it's ready"}
+            {order.partySize ? ` · ${order.partySize} ${order.partySize === 1 ? "person" : "people"}` : ""}
+          </p>
+          {order.booking && (
+            <p>
+              Table booking {order.booking.number} ({order.booking.status})
+            </p>
+          )}
+          {order.delivery.note && <p className="italic text-soft">“{order.delivery.note}”</p>}
+        </div>
+      ) : (
       <div className="rounded-2xl bg-ground p-3 text-sm">
         <p className="font-bold">{order.delivery.name}</p>
         <p>
@@ -176,11 +222,14 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
         </p>
         {order.delivery.note && <p className="italic text-soft">“{order.delivery.note}”</p>}
       </div>
+      )}
       {order.rider && (
         <p className="text-sm">
           Rider: <strong>{order.rider.fullName}</strong> · {formatLiberianPhone(order.rider.phone)}
         </p>
       )}
+      {!visit && !["cancelled", "delivered"].includes(order.status) && <OrderMap order={order} height={240} title="Map" />}
+      {!visit && (order.status === "accepted" || order.status === "ready") && !order.rider && <RiderPicker order={order} onChanged={change} />}
       {order.status === "cancelled" && order.cancelReason && <Alert tone="warn">Cancelled: {order.cancelReason}</Alert>}
       {order.dispute && (
         <DisputeCard dispute={order.dispute} audience="seller">
@@ -196,7 +245,7 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
           <textarea id="reject-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} className="resize-none rounded-[12px] border border-line-strong px-3 py-2.5 text-sm outline-none focus:border-purple" placeholder="e.g. Sold out of size 42 today" />
           <div className="flex gap-2">
             <Button variant="danger" busy={busy} disabled={reason.trim().length < 3} onClick={() => run(() => api.shop.rejectOrder(order.id, reason))}>
-              Turn down order
+              {order.status === "placed" ? "Turn down order" : "Cancel order"}
             </Button>
             <Button variant="ghost" onClick={() => setRejecting(false)}>
               Back
@@ -212,15 +261,28 @@ function SellerOrder({ id, onClose, onChanged }: { id: string; onClose: () => vo
           )}
           {order.status === "accepted" && (
             <Button busy={busy} onClick={() => run(() => api.shop.orderReady(order.id))}>
-              Packed — ready for the rider
+              {visit ? (order.fulfilment === "eat_in" ? "Food is ready" : "Ready to collect") : "Packed — ready for the rider"}
             </Button>
           )}
-          {(order.status === "placed" || order.status === "accepted") && (
+          {visit && (order.status === "accepted" || order.status === "ready") && (
+            <span className="flex flex-wrap items-center gap-2">
+              {order.paymentMethod === "cod" && (
+                <label className="flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={paidHere} onChange={(e) => setPaidHere(e.target.checked)} className="h-4 w-4 accent-[rgb(var(--c-purple))]" />
+                  Buyer paid {formatLD(order.total)}
+                </label>
+              )}
+              <Button variant="success" busy={busy} disabled={order.paymentMethod === "cod" && !paidHere} onClick={() => run(() => api.shop.orderHandedOver(order.id, paidHere))}>
+                {order.fulfilment === "eat_in" ? "Served" : "Collected"}
+              </Button>
+            </span>
+          )}
+          {(order.status === "placed" || order.status === "accepted" || order.status === "ready") && (
             <Button variant="ghost" className="text-danger hover:!text-danger" onClick={() => setRejecting(true)}>
-              Can't do it
+              {order.status === "placed" ? "Can't do it" : "Cancel order"}
             </Button>
           )}
-          {order.status === "ready" && <p className="text-sm text-soft">{order.rider ? `${order.rider.fullName} is coming to pick it up.` : "Waiting for YanaBuy to send a rider."}</p>}
+          {!visit && order.status === "ready" && <p className="text-sm text-soft">{order.rider ? `${order.rider.fullName} is coming to pick it up.` : order.offer ? `Waiting for ${order.offer.rider.fullName} to accept.` : "Pick a rider above."}</p>}
           {order.status === "picked_up" && <p className="text-sm text-soft">On its way to the buyer.</p>}
         </div>
       )}

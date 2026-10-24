@@ -16,21 +16,22 @@ export function riderApplicationOut(req: Request, a: RiderApplicationRow): Rider
     statusReason: a.statusReason,
     submittedAt: a.submittedAt.toISOString(),
     reviewedAt: a.reviewedAt?.toISOString() ?? null,
-    documents: {
-      idType: a.idType,
-      idFrontUrl: signedUrl(req, a.idFrontKey),
-      idBackUrl: a.idBackKey ? signedUrl(req, a.idBackKey) : null,
-      selfieUrl: signedUrl(req, a.selfieKey),
-      licenseUrl: a.licenseKey ? signedUrl(req, a.licenseKey) : null,
-    },
+    // Older applications had ID photos; new ones don't.
+    documents:
+      a.idType && a.idFrontKey && a.selfieKey
+        ? {
+            idType: a.idType,
+            idFrontUrl: signedUrl(req, a.idFrontKey),
+            idBackUrl: a.idBackKey ? signedUrl(req, a.idBackKey) : null,
+            selfieUrl: signedUrl(req, a.selfieKey),
+            licenseUrl: a.licenseKey ? signedUrl(req, a.licenseKey) : null,
+          }
+        : null,
   };
 }
 
 export function myRiderApplication(req: Request, a: RiderApplicationRow): MyRiderApplication {
-  return {
-    ...riderApplicationOut(req, a),
-    keys: { idFrontKey: a.idFrontKey, idBackKey: a.idBackKey, selfieKey: a.selfieKey, licenseKey: a.licenseKey },
-  };
+  return riderApplicationOut(req, a);
 }
 
 export function adminRiderApplication(
@@ -41,7 +42,7 @@ export function adminRiderApplication(
 ): AdminRiderApplication {
   return {
     ...riderApplicationOut(req, a),
-    user: { id: u.id, fullName: u.fullName, phone: u.phone, avatarUrl: u.avatarUrl, role: u.role, status: u.status, createdAt: u.createdAt.toISOString() },
+    user: { id: u.id, fullName: u.fullName, phone: u.phone, email: u.email, emailVerified: !!u.emailVerifiedAt, avatarUrl: u.avatarUrl, role: u.role, status: u.status, createdAt: u.createdAt.toISOString() },
     reviewedBy: reviewer,
   };
 }

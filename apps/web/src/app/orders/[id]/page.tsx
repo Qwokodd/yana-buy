@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { formatLD, formatLiberianPhone, PAYMENT_METHOD_LABEL, type Order } from "@yanabuy/shared";
+import { deliveryDetailLabel, formatLD, formatLiberianPhone, FULFILMENT_LABEL, orderStatusLabel, payLabel, type Order } from "@yanabuy/shared";
 import { Alert, Avatar, Button, messageOf } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
-import { EVENT_LABEL, OrderProgress, OrderStatusBadge } from "@/components/OrderBits";
+import { EVENT_LABEL, FulfilmentBadge, OrderProgress, OrderStatusBadge } from "@/components/OrderBits";
 import { api } from "@/lib/api";
 import { DisputeCard, RateItems, ReportProblem } from "@/components/OrderTrust";
 import { MessageShopButton } from "@/components/MessageShop";
+import { OrderMap } from "@/components/OrderMap";
 
 export default function OrderPage() {
   const { id } = useParams<{ id: string }>();
@@ -63,7 +64,10 @@ export default function OrderPage() {
             )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h1 className="font-display text-[26px] font-extrabold">Order {order.number}</h1>
-              <OrderStatusBadge status={order.status} />
+              <span className="flex items-center gap-2">
+                <FulfilmentBadge fulfilment={order.fulfilment} />
+                <OrderStatusBadge status={order.status} fulfilment={order.fulfilment} />
+              </span>
             </div>
 
             {order.status === "cancelled" ? (
@@ -73,7 +77,7 @@ export default function OrderPage() {
               </Alert>
             ) : (
               <section className="rounded-card border border-line bg-white p-5">
-                <OrderProgress status={order.status} />
+                <OrderProgress status={order.status} fulfilment={order.fulfilment} />
               </section>
             )}
 
@@ -89,6 +93,8 @@ export default function OrderPage() {
                 </a>
               </section>
             )}
+
+            {order.fulfilment === "delivery" && order.status !== "cancelled" && order.status !== "delivered" && <OrderMap order={order} title={order.rider && order.status === "picked_up" ? "Where your order is" : "Delivery map"} />}
 
             <section className="rounded-card border border-line bg-white p-5">
               <div className="mb-3 flex items-center justify-between">
@@ -127,10 +133,17 @@ export default function OrderPage() {
                   <dt className="text-muted">Items</dt>
                   <dd>{formatLD(order.subtotal)}</dd>
                 </div>
+                {order.fulfilment !== "delivery" ? (
+                  <div className="flex justify-between">
+                    <dt className="text-muted">{FULFILMENT_LABEL[order.fulfilment]}</dt>
+                    <dd>No delivery fee</dd>
+                  </div>
+                ) : (
                 <div className="flex justify-between">
-                  <dt className="text-muted">Delivery</dt>
+                  <dt className="text-muted">Delivery{order.deliveryFeeBreakdown ? ` (${deliveryDetailLabel({ ...order.deliveryFeeBreakdown, weightCharged: order.deliveryFeeBreakdown.weightFeeCents > 0 })})` : ""}</dt>
                   <dd>{order.deliveryFee ? formatLD(order.deliveryFee) : "Free"}</dd>
                 </div>
+                )}
                 {order.discount > 0 && (
                   <div className="flex justify-between font-semibold text-success">
                     <dt>Discount{order.discountCode ? ` (${order.discountCode})` : ""}</dt>
@@ -142,8 +155,8 @@ export default function OrderPage() {
                   <dd>{formatLD(order.total)}</dd>
                 </div>
                 <p className="mt-1 text-[13px] text-soft">
-                  {PAYMENT_METHOD_LABEL[order.paymentMethod]} ·{" "}
-                  {order.paymentStatus === "refunded" ? "Refunded" : order.paymentStatus === "paid" ? "Paid" : order.status === "cancelled" ? "Nothing to pay" : "Pay when it arrives"}
+                  {payLabel(order.paymentMethod, order.fulfilment)} ·{" "}
+                  {order.paymentStatus === "refunded" ? "Refunded" : order.paymentStatus === "paid" ? "Paid" : order.status === "cancelled" ? "Nothing to pay" : order.fulfilment === "delivery" ? "Pay when it arrives" : "Pay at the restaurant"}
                 </p>
               </dl>
             </section>
@@ -152,6 +165,25 @@ export default function OrderPage() {
             {order.status === "delivered" && <RateItems order={order} />}
 
             <section className="grid gap-3 sm:grid-cols-2">
+              {order.fulfilment !== "delivery" ? (
+                <div className="rounded-card border border-line bg-white p-4 text-sm">
+                  <p className="mb-1 text-[12px] font-bold uppercase tracking-wide text-muted">{order.fulfilment === "eat_in" ? "Eating in at" : "Collect from"}</p>
+                  <p className="font-bold">{order.shop.name}</p>
+                  <p>{order.shop.address}, {order.shop.city}</p>
+                  <p>
+                    {order.arriveAt
+                      ? `${order.fulfilment === "eat_in" ? "Arriving" : "Collecting"} ${new Date(order.arriveAt).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" })}`
+                      : "As soon as it's ready"}
+                    {order.partySize ? ` · ${order.partySize} ${order.partySize === 1 ? "person" : "people"}` : ""}
+                  </p>
+                  {order.booking && <p className="text-muted">Table booking {order.booking.number} ({order.booking.status})</p>}
+                  {order.shop.location && (
+                    <a href={`https://www.google.com/maps/dir/?api=1&destination=${order.shop.location.lat},${order.shop.location.lng}`} target="_blank" rel="noreferrer" className="mt-1 inline-block font-bold text-purple hover:underline">
+                      Get directions
+                    </a>
+                  )}
+                </div>
+              ) : (
               <div className="rounded-card border border-line bg-white p-4 text-sm">
                 <p className="mb-1 text-[12px] font-bold uppercase tracking-wide text-muted">Delivering to</p>
                 <p className="font-bold">{order.delivery.name}</p>
@@ -162,12 +194,13 @@ export default function OrderPage() {
                 </p>
                 <p className="text-muted">{formatLiberianPhone(order.delivery.phone)}</p>
               </div>
+              )}
               <div className="rounded-card border border-line bg-white p-4 text-sm">
                 <p className="mb-2 text-[12px] font-bold uppercase tracking-wide text-muted">What happened</p>
                 <ol className="flex flex-col gap-1.5">
                   {order.events.map((e, i) => (
                     <li key={i}>
-                      <span className="font-semibold">{EVENT_LABEL[e.status] ?? e.status}</span>
+                      <span className="font-semibold">{order.fulfilment !== "delivery" && (e.status === "ready" || e.status === "delivered") ? orderStatusLabel(e.status, order.fulfilment) : (EVENT_LABEL[e.status] ?? e.status)}</span>
                       <span className="block text-xs text-muted">
                         {new Date(e.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                       </span>

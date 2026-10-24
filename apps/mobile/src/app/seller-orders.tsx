@@ -2,12 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { formatLD, formatLiberianPhone, type Order, type OrderSummary } from "@yanabuy/shared";
-import { StatusPill } from "@/components/OrderBits";
+import { formatLD, formatLiberianPhone, FULFILMENT_LABEL, type Order, type OrderSummary } from "@yanabuy/shared";
+import { FulfilmentPill, StatusPill } from "@/components/OrderBits";
+
+/** "Thu 22 Oct, 18:30" — Liberia time (UTC). */
+const visitTime = (iso: string) => new Date(iso).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "UTC" });
 import { DisputeBox } from "@/components/Trust";
 import { BackBar } from "@/components/Products";
 import { Button, Card, Field, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
+import { OrderMap } from "@/components/OrderMap";
+import { RiderPicker } from "@/components/RiderPicker";
 import { colors, font } from "@/lib/theme";
 
 type View_ = "active" | "done";
@@ -74,9 +79,11 @@ export default function SellerOrders() {
                 </View>
                 <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>
                   {o.itemCount} {o.itemCount === 1 ? "item" : "items"} · {new Date(o.createdAt).toLocaleString("en-GB", { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" })}
+                  {o.fulfilment !== "delivery" && o.arriveAt ? ` · arriving ${visitTime(o.arriveAt)}` : ""}
                 </Text>
                 <View style={{ flexDirection: "row", gap: 6 }}>
-                  <StatusPill status={o.status} />
+                  <StatusPill status={o.status} fulfilment={o.fulfilment} />
+                  <FulfilmentPill fulfilment={o.fulfilment} />
                   {o.disputeStatus === "open" && (
                     <View style={{ backgroundColor: colors.dangerTint, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 }}>
                       <Text style={{ fontFamily: font.bold, fontSize: 12, color: colors.danger }}>Problem reported</Text>
@@ -103,12 +110,18 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
   const [error, setError] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState("");
+  const [paidHere, setPaidHere] = useState(false);
 
   useEffect(() => {
-    api.shop
-      .order(id)
-      .then((res) => setOrder(res.order))
-      .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load"));
+    const get = () =>
+      api.shop
+        .order(id)
+        .then((res) => setOrder(res.order))
+        .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load"));
+    get();
+    // Keeps the rider's answer and live position fresh.
+    const t = setInterval(get, 20000);
+    return () => clearInterval(t);
   }, [id]);
 
   async function run(action: () => Promise<{ order: Order }>) {
@@ -126,6 +139,7 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
   }
 
   if (!order) return <Card>{<Text style={{ color: colors.muted }}>{error ?? "Loading…"}</Text>}</Card>;
+  const visit = order.fulfilment !== "delivery";
 
   return (
     <Card style={{ gap: 10, borderColor: colors.purple, borderWidth: 2 }}>
@@ -135,7 +149,10 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
           <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.muted }}>✕</Text>
         </Pressable>
       </View>
-      <StatusPill status={order.status} />
+      <View style={{ flexDirection: "row", gap: 6 }}>
+        <StatusPill status={order.status} fulfilment={order.fulfilment} />
+        <FulfilmentPill fulfilment={order.fulfilment} />
+      </View>
       {error && <Notice>{error}</Notice>}
       {order.items.map((i) => (
         <Text key={i.id} style={{ fontFamily: font.semibold, fontSize: 14, color: colors.ink }}>
@@ -144,8 +161,18 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
         </Text>
       ))}
       <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>
-        {order.paymentMethod === "cod" ? `The buyer pays the rider ${formatLD(order.total)} in cash.` : `Paid online (${formatLD(order.total)}).`}
+        {order.paymentMethod === "cod"
+          ? visit
+            ? `The buyer pays you ${formatLD(order.total)} at the restaurant (no delivery fee).`
+            : `The buyer pays the rider ${formatLD(order.total)} in cash.`
+          : `Paid online (${formatLD(order.total)}).`}
       </Text>
+      {order.sellerEarning != null && (
+        <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.success }}>
+          {`You earn ${formatLD(order.sellerEarning)} — your full prices.`}
+          {visit && order.paymentMethod === "cod" ? " YanaBuy's commission (the rest of what the buyer pays you) comes off your balance." : ""}
+        </Text>
+      )}
       {order.dispute && (
         <DisputeBox dispute={order.dispute} audience="seller">
           {order.dispute.status === "open" && (
@@ -159,6 +186,19 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
           )}
         </DisputeBox>
       )}
+      {visit ? (
+        <View style={{ backgroundColor: colors.warnTint, borderRadius: 14, padding: 10, gap: 2 }}>
+          <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>
+            {FULFILMENT_LABEL[order.fulfilment]} · {order.delivery.name} · {formatLiberianPhone(order.delivery.phone)}
+          </Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>
+            {order.arriveAt ? `Arriving ${visitTime(order.arriveAt)}` : "Coming as soon as it's ready"}
+            {order.partySize ? ` · ${order.partySize} ${order.partySize === 1 ? "person" : "people"}` : ""}
+          </Text>
+          {order.booking && <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>Table booking {order.booking.number} ({order.booking.status})</Text>}
+          {order.delivery.note && <Text style={{ fontFamily: font.regular, fontSize: 13, fontStyle: "italic", color: colors.textSoft }}>“{order.delivery.note}”</Text>}
+        </View>
+      ) : (
       <View style={{ backgroundColor: colors.ground, borderRadius: 14, padding: 10, gap: 2 }}>
         <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>{order.delivery.name}</Text>
         <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.textSoft }}>
@@ -166,10 +206,21 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
         </Text>
         {order.delivery.note && <Text style={{ fontFamily: font.regular, fontSize: 13, fontStyle: "italic", color: colors.textSoft }}>“{order.delivery.note}”</Text>}
       </View>
+      )}
       {order.rider && (
         <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.ink }}>
           Rider: <Text style={{ fontFamily: font.bold }}>{order.rider.fullName}</Text> · {formatLiberianPhone(order.rider.phone)}
         </Text>
+      )}
+      {!visit && !["cancelled", "delivered"].includes(order.status) && <OrderMap order={order} title="Map" />}
+      {!visit && (order.status === "accepted" || order.status === "ready") && !order.rider && (
+        <RiderPicker
+          order={order}
+          onChanged={(o) => {
+            setOrder(o);
+            onChanged();
+          }}
+        />
       )}
       {rejecting ? (
         <>
@@ -180,11 +231,37 @@ function SellerOrder({ id, onChanged, onClose }: { id: string; onChanged: () => 
       ) : (
         <>
           {order.status === "placed" && <Button title="Accept order" busy={busy} onPress={() => run(() => api.shop.acceptOrder(order.id))} />}
-          {order.status === "accepted" && <Button title="Packed — ready for the rider" busy={busy} onPress={() => run(() => api.shop.orderReady(order.id))} />}
-          {(order.status === "placed" || order.status === "accepted") && <Button title="Can't do it" variant="ghost" onPress={() => setRejecting(true)} />}
-          {order.status === "ready" && (
+          {order.status === "accepted" && (
+            <Button
+              title={visit ? (order.fulfilment === "eat_in" ? "Food is ready" : "Ready to collect") : "Packed — ready for the rider"}
+              busy={busy}
+              onPress={() => run(() => api.shop.orderReady(order.id))}
+            />
+          )}
+          {visit && (order.status === "accepted" || order.status === "ready") && (
+            <>
+              {order.paymentMethod === "cod" && (
+                <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: paidHere }} onPress={() => setPaidHere((v) => !v)} style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                  <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: colors.purple, backgroundColor: paidHere ? colors.purple : "#fff", alignItems: "center", justifyContent: "center" }}>
+                    {paidHere && <Text style={{ color: "#fff", fontFamily: font.bold, fontSize: 13 }}>✓</Text>}
+                  </View>
+                  <Text style={{ fontFamily: font.semibold, fontSize: 14, color: colors.ink }}>Buyer paid {formatLD(order.total)}</Text>
+                </Pressable>
+              )}
+              <Button
+                title={order.fulfilment === "eat_in" ? "Served" : "Collected"}
+                busy={busy}
+                disabled={order.paymentMethod === "cod" && !paidHere}
+                onPress={() => run(() => api.shop.orderHandedOver(order.id, paidHere))}
+              />
+            </>
+          )}
+          {(order.status === "placed" || order.status === "accepted" || order.status === "ready") && (
+            <Button title={order.status === "placed" ? "Can't do it" : "Cancel order"} variant="ghost" onPress={() => setRejecting(true)} />
+          )}
+          {!visit && order.status === "ready" && (
             <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.textSoft }}>
-              {order.rider ? `${order.rider.fullName} is coming to pick it up.` : "Waiting for YanaBuy to send a rider."}
+              {order.rider ? `${order.rider.fullName} is coming to pick it up.` : order.offer ? `Waiting for ${order.offer.rider.fullName} to accept.` : "Pick a rider above."}
             </Text>
           )}
         </>

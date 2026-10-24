@@ -14,7 +14,7 @@ const PAGE = 24;
 
 /** Every open shop and restaurant, by category — browse, then visit their page. */
 export default function ShopsDirectory() {
-  const { mode, setMode } = useMode();
+  const { mode, setMode, switchMode } = useMode();
   const [cats, setCats] = useState<ShopCategory[]>([]);
   const [category, setCategory] = useState<string>("");
   const [query, setQuery] = useState("");
@@ -74,7 +74,7 @@ export default function ShopsDirectory() {
                 role="tab"
                 aria-selected={mode === m}
                 onClick={() => {
-                  setMode(m);
+                  switchMode(m);
                   setCategory("");
                   setPage(1);
                 }}

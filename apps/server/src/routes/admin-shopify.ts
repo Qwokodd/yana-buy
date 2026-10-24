@@ -129,7 +129,7 @@ adminShopifyRouter.post("/shops/:id/handover", async (req, res) => {
   if (hasShop) throw new HttpError(409, "That person already has a shop. One account can own one shop.", { phone: "Already has a shop" });
 
   await db.transaction(async (tx) => {
-    await tx.update(shops).set({ ownerId: next.id, phone: next.phone, updatedAt: new Date() }).where(eq(shops.id, shop.id));
+    await tx.update(shops).set({ ownerId: next.id, phone: next.phone ?? shop.phone, updatedAt: new Date() }).where(eq(shops.id, shop.id));
     await tx.update(users).set({ role: "vendor", updatedAt: new Date() }).where(eq(users.id, next.id));
     await tx
       .update(users)

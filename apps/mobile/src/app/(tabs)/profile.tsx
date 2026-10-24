@@ -2,13 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import { formatLiberianPhone, ApiError } from "@yanabuy/shared";
+import { formatLiberianPhone, formatPhone, ApiError } from "@yanabuy/shared";
 import { AvatarPicker } from "@/components/AvatarPicker";
 import { Button, Card, Field, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { workspaceTitle } from "@/lib/workspace";
 import { colors, font } from "@/lib/theme";
 import { EmailConfirm } from "@/components/EmailConfirm";
+import { PhoneConfirm } from "@/components/LoginCode";
 
 const ROLE = { buyer: "Buyer", vendor: "Seller", rider: "Rider", admin: "Admin" } as const;
 
@@ -18,6 +20,7 @@ export default function Profile() {
   const { user, loading, setUser, logout, reload } = useAuth();
   const [form, setForm] = useState({ fullName: "", city: "" });
   const [changingEmail, setChangingEmail] = useState(false);
+  const [changingPhone, setChangingPhone] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -106,7 +109,7 @@ export default function Profile() {
         <Card style={{ alignItems: "center", gap: 6, paddingVertical: 22 }}>
           <AvatarPicker name={user.fullName} url={user.avatarUrl} onChange={savePhoto} />
           <Text style={{ marginTop: 6, fontFamily: font.display, fontSize: 20, color: colors.ink }}>{user.fullName}</Text>
-          <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{formatLiberianPhone(user.phone)}</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{user.phone ? formatLiberianPhone(user.phone) : user.email}</Text>
         </Card>
 
         {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
@@ -209,12 +212,42 @@ export default function Profile() {
 
         <Card style={{ gap: 10 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>Phone number</Text>
+            {user.phone ? (
+              <Text style={{ fontFamily: font.bold, fontSize: 12, color: user.phoneVerified ? colors.success : colors.danger }}>{user.phoneVerified ? "Confirmed" : "Not confirmed"}</Text>
+            ) : null}
+          </View>
+          <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>You can log in with this number. We text your login codes and order updates to it.</Text>
+          {user.phone && !changingPhone ? (
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+              <Text style={{ fontFamily: font.semibold, fontSize: 14.5, color: colors.ink, flexShrink: 1 }}>{formatPhone(user.phone)}</Text>
+              {user.canVerifyBy?.includes("sms") && (
+                <Pressable accessibilityRole="button" onPress={() => setChangingPhone(true)}>
+                  <Text style={{ fontFamily: font.bold, fontSize: 14, color: colors.purple }}>Change</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <PhoneConfirm
+              user={user}
+              changing={changingPhone}
+              onDone={(u) => {
+                setUser(u);
+                setChangingPhone(false);
+                setNotice({ tone: "success", text: `Phone number confirmed: ${formatPhone(u.phone)}` });
+              }}
+            />
+          )}
+        </Card>
+
+        <Card style={{ gap: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>Email</Text>
             {user.email ? (
               <Text style={{ fontFamily: font.bold, fontSize: 12, color: user.emailVerified ? colors.success : colors.danger }}>{user.emailVerified ? "Confirmed" : "Not confirmed"}</Text>
             ) : null}
           </View>
-          <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>We email and text you about your orders, messages and account.</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>You can log in with your email too. We email you about your orders, messages and account.</Text>
           {user.email && user.emailVerified && !changingEmail ? (
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
               <Text style={{ fontFamily: font.semibold, fontSize: 14.5, color: colors.ink, flexShrink: 1 }}>{user.email}</Text>
@@ -238,17 +271,17 @@ export default function Profile() {
         {(user.role === "buyer" || user.role === "vendor") && (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={user.role === "vendor" ? "My shop" : "Open a shop or restaurant"}
+            accessibilityLabel={user.role === "vendor" ? workspaceTitle(user) : "Open a shop or restaurant"}
             onPress={() => router.push("/sell")}
             style={{ backgroundColor: colors.ink, borderRadius: 20, padding: 18, overflow: "hidden" }}
           >
             <View style={{ position: "absolute", right: -40, top: -40, width: 130, height: 130, borderRadius: 65, backgroundColor: colors.amber }} />
-            <Text style={{ fontFamily: font.display, fontSize: 18, color: "#fff" }}>{user.role === "vendor" ? "My shop" : "Have something to sell?"}</Text>
+            <Text style={{ fontFamily: font.display, fontSize: 18, color: "#fff" }}>{user.role === "vendor" ? workspaceTitle(user) : "Have something to sell?"}</Text>
             <Text style={{ marginTop: 4, maxWidth: 240, fontFamily: font.regular, fontSize: 13.5, color: "rgba(255,255,255,0.8)", lineHeight: 19 }}>
-              {user.role === "vendor" ? "See your shop's status and update its details." : "Open a shop or restaurant. It's free — we just check your ID first."}
+              {user.role === "vendor" ? (user.myShop?.kind === "restaurant" ? "Manage your menu, orders and restaurant details." : "Manage your products, orders and shop details.") : "Open a shop or restaurant. It's free — we just check your ID first."}
             </Text>
             <View style={{ marginTop: 12, alignSelf: "flex-start", backgroundColor: colors.amber, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 8 }}>
-              <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>{user.role === "vendor" ? "Go to my shop" : "Start selling"}</Text>
+              <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>{user.role === "vendor" ? (user.myShop?.kind === "restaurant" ? "Go to my restaurant" : "Go to my shop") : "Start selling"}</Text>
             </View>
           </Pressable>
         )}

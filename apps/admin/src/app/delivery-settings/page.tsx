@@ -126,6 +126,13 @@ export default function DeliverySettingsPage() {
               );
             })()}
 
+            <p className="rounded-2xl bg-purple-tint px-4 py-3 text-[13px] text-soft">
+              Want the fee worked out by distance (and weight) instead?{" "}
+              <a href="/delivery-pricing" className="font-bold text-purple underline">
+                Fees by distance &amp; weight
+              </a>
+            </p>
+
             <fieldset className="flex flex-col gap-2">
               <legend className="mb-1 text-[13px] font-bold">Delivery areas in {countryName(tab)}</legend>
               <p className="-mt-1 text-[12.5px] text-muted">
@@ -166,7 +173,7 @@ export default function DeliverySettingsPage() {
                       <span className="font-semibold">{PAYMENT_METHOD_LABEL[m]}</span>
                     </span>
                     {m === "cod" ? (
-                      <Badge tone="success">Always on — riders collect the cash</Badge>
+                      <Badge tone="success">Eat-in &amp; pickup only — paid at the restaurant. Delivery orders are always paid online first.</Badge>
                     ) : isReady ? (
                       <Badge tone="purple">Connected</Badge>
                     ) : (

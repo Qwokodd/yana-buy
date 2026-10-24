@@ -65,7 +65,7 @@ export default function OrdersPage() {
                     {new Date(o.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}
                   </p>
                 </div>
-                <OrderStatusBadge status={o.status} />
+                <OrderStatusBadge status={o.status} fulfilment={o.fulfilment} />
               </Link>
             </li>
           ))}

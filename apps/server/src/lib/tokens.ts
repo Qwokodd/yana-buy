@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import { and, eq, isNull, gt } from "drizzle-orm";
 import { env } from "../env";
 import { db } from "../db/client";
-import { sessions } from "../db/schema";
+import { sessions, trustedDevices } from "../db/schema";
 import type { UserRole } from "@yanabuy/shared";
 
 const ACCESS_TTL = "15m";
@@ -62,8 +62,9 @@ export async function endSession(raw: string) {
   await db.update(sessions).set({ revokedAt: new Date() }).where(eq(sessions.tokenHash, hash(raw)));
 }
 
-/** Signs a user out of every device (used when they're blocked or their role changes). */
+/** Signs a user out of every device (used when they're blocked or their role changes). Trusted devices need a login code again. */
 export async function endAllSessions(userId: string) {
+  await db.delete(trustedDevices).where(eq(trustedDevices.userId, userId));
   await db
     .update(sessions)
     .set({ revokedAt: new Date() })

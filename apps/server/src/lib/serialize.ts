@@ -2,8 +2,11 @@ import type { Request } from "express";
 import type { AdminBanner, Banner, Category, Shop, ShopDocuments } from "@yanabuy/shared";
 import type { BannerRow, CategoryRow, ShopRow } from "../db/schema";
 import { signedUrl } from "./private-files";
-import type { UserRow } from "../db/schema";
-import { needsEmail } from "./email-codes";
+import { shops, type UserRow } from "../db/schema";
+import { db } from "../db/client";
+import { eq } from "drizzle-orm";
+import { needsVerification } from "./email-codes";
+import { emailReady, smsReady } from "./outbound";
 import type { AdminUser, User } from "@yanabuy/shared";
 
 /** What a user may see about themselves. Never includes the password hash. */
@@ -14,13 +17,31 @@ export function publicUser(u: UserRow): User {
     phone: u.phone,
     email: u.email,
     emailVerified: !!u.emailVerifiedAt,
-    needsEmail: needsEmail(u),
+    phoneVerified: !!u.phoneVerifiedAt,
+    needsVerification: needsVerification(u),
+    needsEmail: needsVerification(u),
+    canVerifyBy: [...(smsReady() ? (["sms"] as const) : []), ...(emailReady() ? (["email"] as const) : [])],
     role: u.role,
     status: u.status,
     avatarUrl: u.avatarUrl,
     city: u.city,
     createdAt: u.createdAt.toISOString(),
+    location: lastLocation(u),
+    riderOnline: u.riderOnline,
   };
+}
+
+/** publicUser() plus the seller's own approved shop — for log-in and /api/me, so the apps open on "My shop". */
+export async function userWithShop(u: UserRow): Promise<User> {
+  const base = publicUser(u);
+  if (u.role !== "vendor") return { ...base, myShop: null };
+  const [s] = await db.select({ id: shops.id, kind: shops.kind, name: shops.name, slug: shops.slug, status: shops.status }).from(shops).where(eq(shops.ownerId, u.id)).limit(1);
+  return { ...base, myShop: s && s.status === "approved" ? { id: s.id, kind: s.kind, name: s.name, slug: s.slug } : null };
+}
+
+/** A user's last GPS spot, if they've shared one. */
+export function lastLocation(u: Pick<UserRow, "lat" | "lng" | "locatedAt">) {
+  return u.lat != null && u.lng != null && u.locatedAt ? { lat: u.lat, lng: u.lng, at: u.locatedAt.toISOString() } : null;
 }
 
 export function adminUser(u: UserRow): AdminUser {
@@ -52,7 +73,10 @@ export function shopOut(s: ShopRow): Shop {
     importedFrom: s.importedFrom,
     categoryId: s.categoryId,
     hours: s.hours,
+    location: s.lat != null && s.lng != null ? { lat: s.lat, lng: s.lng } : null,
     country: s.country,
+    eatIn: s.kind === "restaurant" && s.eatIn,
+    pickup: s.kind === "restaurant" && s.pickup,
   };
 }
 
@@ -77,6 +101,7 @@ export function bannerOut(b: BannerRow): Banner {
     title: b.title,
     subtitle: b.subtitle,
     imageUrl: b.imageUrl,
+    videoUrl: b.videoUrl,
     linkUrl: b.linkUrl,
     buttonLabel: b.buttonLabel,
     advertiser: b.advertiser,

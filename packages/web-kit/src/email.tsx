@@ -22,12 +22,11 @@ export function EmailConfirm({
   changing?: boolean;
 }) {
   const [email, setEmail] = useState(changing ? "" : (user.email ?? ""));
-  const [sentTo, setSentTo] = useState<string | null>(!changing && user.email && !user.emailVerified ? user.email : null);
+  // Codes are only sent when asked for ("Send me a code"), with their email already filled in.
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ tone: "success" | "danger" | "info"; text: string } | null>(
-    !changing && user.email && !user.emailVerified ? { tone: "info", text: `We sent a 6-digit code to ${user.email}. Check your inbox (and spam).` } : null
-  );
+  const [notice, setNotice] = useState<{ tone: "success" | "danger" | "info"; text: string } | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
 
   async function send(e?: React.FormEvent) {

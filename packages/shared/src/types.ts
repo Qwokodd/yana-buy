@@ -1,21 +1,48 @@
 import type { Country } from "./country";
+import type { FeeBreakdown } from "./delivery-fee";
 export type UserRole = "buyer" | "vendor" | "rider" | "admin";
 export type UserStatus = "active" | "blocked";
+
+/** A spot on the map. */
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+}
+
+/** Someone's last known spot and when it was taken. */
+export interface LastLocation extends GeoPoint {
+  at: string;
+}
 
 export interface User {
   id: string;
   fullName: string;
-  phone: string;
+  phone: string | null;
   email: string | null;
   /** The email was confirmed with a code. */
   emailVerified: boolean;
-  /** true = the app must ask for (or confirm) an email before carrying on. */
+  /** The phone number was confirmed with a text-message code. */
+  phoneVerified: boolean;
+  /**
+   * true = the app must ask them to confirm their phone or email before checkout,
+   * opening a shop and the like (neither is confirmed yet, and codes can be sent).
+   */
+  needsVerification: boolean;
+  /** @deprecated same as needsVerification — kept for older app versions. */
   needsEmail: boolean;
+  /** How codes can be sent right now ("sms" once text messages are set up, "email" once email is). */
+  canVerifyBy: ("sms" | "email")[];
   role: UserRole;
   status: UserStatus;
+  /** Sellers: their own approved shop or restaurant (so the app opens on "My shop" / "My restaurant"). Sent on log-in and /api/me. */
+  myShop?: { id: string; kind: ShopKind; name: string; slug: string } | null;
   avatarUrl: string | null;
   city: string | null;
   createdAt: string;
+  /** Last known spot from their phone or browser. */
+  location: LastLocation | null;
+  /** Riders: switched Online in the app. */
+  riderOnline: boolean;
 }
 
 export interface AdminUser extends User {
@@ -30,7 +57,29 @@ export interface AuthResponse {
   refreshToken: string;
   /** Signed up with a number that bought on the old Shopify store — their account and orders were waiting. */
   welcomeBack?: boolean;
+  /** "Trust this device" was ticked: the app keeps this and sends it with the next login to skip the code. */
+  deviceToken?: string;
 }
+
+/** Where a 6-digit code goes: a text message to the phone, or an email. */
+export type LoginChannel = "sms" | "email";
+
+/** The password was right — now the 6-digit code (second step of logging in, or of claiming an old account). */
+export interface LoginChallenge {
+  needsCode: true;
+  /** Send this back with the code. */
+  challengeId: string;
+  channel: LoginChannel;
+  /** Partly hidden, e.g. "(•••) •••-0123" or "da•••@gmail.com". */
+  sentTo: string;
+  /** Every place a code can go for this account ("text me instead" / "email me instead"). */
+  channels: LoginChannel[];
+  purpose: "login" | "claim";
+}
+
+/** Logging in (or signing up with an old store number) either finishes, or asks for a code first. */
+export type LoginResult = AuthResponse | LoginChallenge;
+export const needsCode = (r: LoginResult): r is LoginChallenge => "needsCode" in r && r.needsCode === true;
 
 export interface Page<T> {
   items: T[];
@@ -96,8 +145,14 @@ export interface Shop {
   categoryId: string | null;
   /** Opening hours in the owner's words. */
   hours: string | null;
+  /** The shop's pin on the map (null = not set yet). */
+  location: GeoPoint | null;
   /** Which country the shop sells in. Shoppers only see shops from the country they picked. */
   country: Country;
+  /** Restaurants: takes eat-in orders (menu price only, paid at the restaurant). */
+  eatIn: boolean;
+  /** Restaurants: takes pickup orders (menu price only, buyer collects). */
+  pickup: boolean;
 }
 
 /** ID photos, as short-lived private links. Only the owner and admins get these. */
@@ -114,7 +169,7 @@ export interface MyShop extends Shop {
 }
 
 export interface AdminShop extends Shop {
-  owner: { id: string; fullName: string; phone: string; avatarUrl: string | null; status: UserStatus; createdAt: string; unclaimed: boolean };
+  owner: { id: string; fullName: string; phone: string | null; avatarUrl: string | null; status: UserStatus; createdAt: string; unclaimed: boolean };
   documents?: ShopDocuments;
   reviewedBy?: { id: string; fullName: string } | null;
 }
@@ -157,7 +212,7 @@ export interface Category {
 }
 
 export type BannerKind = "banner" | "ad";
-export type BannerPlacement = "hero" | "strip";
+export type BannerPlacement = "hero" | "strip" | "promo";
 export type BannerPlatform = "all" | "web" | "app";
 export type BannerMode = "all" | "goods" | "food";
 
@@ -167,9 +222,12 @@ export interface Banner {
   title: string;
   subtitle: string | null;
   imageUrl: string;
+  /** A short (5–10 second) video ad or promo. Plays muted on a loop; imageUrl is its cover picture. */
+  videoUrl: string | null;
   linkUrl: string | null;
   buttonLabel: string | null;
   advertiser: string | null;
+  /** hero = top slider, strip = between products, promo = promo card with a countdown to endsAt. */
   placement: BannerPlacement;
   platform: BannerPlatform;
   mode: BannerMode;
@@ -251,6 +309,8 @@ export interface ProductVariant {
   /** null = the seller doesn't count stock. */
   stock: number | null;
   image: string | null;
+  /** Weight of one, in grams (for weight-based delivery fees). Missing = the product's weight. */
+  weightGrams?: number | null;
 }
 
 /** "Red / M" */
@@ -276,6 +336,8 @@ export interface ProductCard {
   deliveryDays: number | null;
   /** Has colour/size choices — price is the lowest one ("from $x"). */
   hasOptions: boolean;
+  /** A flash sale: the old price comes back at this time (shown as a countdown). */
+  saleEndsAt: string | null;
 }
 
 /** A product's own page. */
@@ -285,6 +347,8 @@ export interface Product extends ProductCard {
   stock: number | null;
   options: ProductOption[];
   variants: ProductVariant[];
+  /** Weight of one, in grams (for delivery fees). null = not given. */
+  weightGrams: number | null;
   /** A service people book a time for. */
   bookable: boolean;
   durationMinutes: number | null;
@@ -294,6 +358,8 @@ export interface Product extends ProductCard {
 
 /** The seller's view of their own product. */
 export interface MyProduct extends Product {
+  /** For the seller and admin, price / compareAtPrice / variant prices are the seller's own. This is what buyers pay (YanaBuy's commission added on top). */
+  buyerPrice: number;
   status: ProductStatus;
   statusReason: string | null;
   hidden: boolean;
@@ -313,10 +379,14 @@ export interface ProductInput {
   /** Whole cents. Required unless the product has options (then each variant has its own). */
   price?: number;
   compareAtPrice?: number | null;
+  /** Flash sale end (ISO time): the old price comes back then. null = no end. */
+  saleEndsAt?: string | null;
   stock?: number | null;
   images: string[];
   shipsFromChina?: boolean;
   deliveryDays?: number | null;
+  /** Weight of one, in grams (for delivery fees). */
+  weightGrams?: number | null;
   /** Leave empty for a product without choices. With options, price/stock come from the variants. */
   options?: ProductOption[];
   bookable?: boolean;
@@ -332,6 +402,9 @@ export interface PublicShop extends ShopSummary {
   address: string;
   category: { id: string; name: string; slug: string } | null;
   hours: string | null;
+  /** Restaurants: takes eat-in / pickup orders as well as delivery. */
+  eatIn: boolean;
+  pickup: boolean;
   /** Set when the shop takes bookings: tables (restaurants) or appointments (services). */
   booking: { kind: BookingKind; maxPartySize: number; daysAhead: number; note: string | null } | null;
   /** The work profile (null = not filled in). */
@@ -356,6 +429,10 @@ export interface ProductQuery {
   china?: boolean;
   /** Only services people can book a time for. */
   bookable?: boolean;
+  /** Only items YanaBuy picked as featured. */
+  featured?: boolean;
+  /** Only flash sales still running, soonest to end first. */
+  flash?: boolean;
   page?: number;
 }
 
@@ -364,6 +441,13 @@ export interface ProductQuery {
 export type OrderStatus = "awaiting_payment" | "placed" | "accepted" | "ready" | "picked_up" | "delivered" | "cancelled";
 export type PaymentMethod = "cod" | "mtn_momo" | "orange_money" | "card";
 export type PaymentStatus = "pending" | "paid" | "failed" | "refunded";
+/** How the buyer gets the order: a rider brings it, they eat at the restaurant, or they collect it. */
+export type Fulfilment = "delivery" | "eat_in" | "pickup";
+export const FULFILMENTS: Fulfilment[] = ["delivery", "eat_in", "pickup"];
+export const FULFILMENT_LABEL: Record<Fulfilment, string> = { delivery: "Delivery", eat_in: "Eat in", pickup: "Pickup" };
+/** Eat in / pickup: what to call "cash on delivery". */
+export const payLabel = (method: PaymentMethod, fulfilment: Fulfilment) =>
+  method === "cod" ? (fulfilment === "delivery" ? "Cash on delivery" : "Pay at the restaurant") : method === "mtn_momo" ? "MTN MoMo" : method === "orange_money" ? "Orange Money" : "Card";
 
 export interface CartItem {
   productId: string;
@@ -395,6 +479,12 @@ export interface QuoteShop {
   deliveryFee: number;
   /** This shop's share of the discount-code money off. */
   discount: number;
+  /** Set when the fee was worked out by distance (and weight): what it was based on. */
+  deliveryDetail?: { distanceM: number; billedDistance: number; distanceUnit: "km" | "mi"; billedWeight: number; weightUnit: "kg" | "lb"; weightCharged: boolean; heavy: boolean } | null;
+  /** Why this shop can't deliver here (too far / too heavy). Checkout is blocked while set. */
+  deliveryProblem?: string | null;
+  /** The ways this shop lets buyers get their order (delivery is always there). */
+  fulfilments: Fulfilment[];
 }
 
 export interface Quote {
@@ -416,6 +506,12 @@ export interface Quote {
   /** The country being shopped in (from the country switch). Items from other countries can't be bought in this cart. */
   country: Country;
   paymentMethods: { method: PaymentMethod; enabled: boolean }[];
+  /** How the buyer wants it: delivery (menu + delivery fee) or eat in / pickup (menu price only). */
+  fulfilment: Fulfilment;
+  /** Eat in / pickup / delivery the buyer can pick for this cart (eat in and pickup need one restaurant that offers them). */
+  fulfilments: Fulfilment[];
+  /** Why the chosen way can't be used for this cart. Checkout is blocked while set. */
+  fulfilmentProblem: string | null;
   ok: boolean;
 }
 
@@ -466,6 +562,9 @@ export interface DeliveryDetails {
   areaId?: string | null;
   /** The area's name, as saved on the order. */
   area?: string | null;
+  /** The delivery pin: the buyer's current location, or a spot picked on the map. */
+  lat?: number | null;
+  lng?: number | null;
 }
 
 export interface DeliverySettings {
@@ -502,7 +601,7 @@ export interface OrderEvent {
 export interface PersonContact {
   id: string;
   fullName: string;
-  phone: string;
+  phone: string | null;
   avatarUrl: string | null;
 }
 
@@ -519,20 +618,36 @@ export interface OrderSummary {
   shop: ShopSummary;
   createdAt: string;
   rider: PersonContact | null;
+  /** A rider the shop asked to deliver, who hasn't answered yet. */
+  offer: { rider: PersonContact; at: string } | null;
   /** A problem the buyer reported, if any. */
   disputeStatus: DisputeStatus | null;
+  /** Delivery, eat in or pickup. */
+  fulfilment: Fulfilment;
+  /** Eat in / pickup: when the buyer will arrive (null = as soon as it's ready). */
+  arriveAt: string | null;
+  /** Eat in: how many people. */
+  partySize: number | null;
 }
 
 export interface Order extends OrderSummary {
+  /** Seller and admin only (null for buyers): what the shop earns from this order — its own prices, no commission. */
+  sellerEarning?: number | null;
   subtotal: number;
   deliveryFee: number;
+  /** How the delivery fee was worked out, when it was priced by distance (and weight). */
+  deliveryFeeBreakdown: FeeBreakdown | null;
   /** Discount-code money off (paid by YanaBuy). */
   discount: number;
   discountCode: string | null;
   items: OrderItem[];
   delivery: DeliveryDetails;
-  shop: ShopSummary & { phone: string; address: string };
+  shop: ShopSummary & { phone: string; address: string; location: GeoPoint | null };
   buyer: PersonContact;
+  /** The rider's live spot (while the order has a rider). */
+  riderLocation: LastLocation | null;
+  /** Riders who said no to delivering this order. */
+  declinedRiderIds: string[];
   cancelReason: string | null;
   cancelledBy: string | null;
   events: OrderEvent[];
@@ -546,6 +661,36 @@ export interface Order extends OrderSummary {
   reviewedProductIds: string[];
   /** Until when the buyer can still report a problem (delivered orders only). */
   disputeUntil: string | null;
+  /** Eat in: the table booking the buyer attached. */
+  booking: { id: string; number: string; status: BookingStatus; startsAt: string; partySize: number | null } | null;
+}
+
+/** An online rider near a shop, for the shop to pick. */
+export interface NearbyRider extends PersonContact {
+  location: LastLocation;
+  distanceKm: number;
+  activeDeliveries: number;
+  vehicle: string | null;
+  /** They already said no to this order. */
+  declined: boolean;
+  /** False when the order is heavy and their vehicle isn't a keke or car — they can't be asked. */
+  canCarry: boolean;
+}
+
+/** A packed order near a rider that nobody has taken yet — first to accept gets it. */
+export interface OpenJob extends OrderSummary {
+  /** From the rider to the shop. */
+  distanceKm: number;
+}
+
+/** Everything on the admin's live map. */
+export interface AdminMap {
+  shops: { id: string; name: string; slug: string; kind: ShopKind; city: string; status: ShopStatus; location: GeoPoint; fromOwner: boolean }[];
+  riders: (PersonContact & { online: boolean; location: LastLocation; activeDeliveries: number })[];
+  buyers: (PersonContact & { location: LastLocation })[];
+  /** Open orders with a delivery pin. */
+  orders: { id: string; number: string; status: OrderStatus; location: GeoPoint; shopName: string }[];
+  radiusKm: number;
 }
 
 export interface RiderSummary extends PersonContact {
@@ -561,9 +706,36 @@ export type PayoutMethod = "mtn_momo" | "orange_money";
 export interface FinanceSettings {
   /** YanaBuy's cut of the item price (not delivery), in percent. */
   goodsCommission: number;
+  /** Restaurants, delivery orders. */
   foodCommission: number;
+  /** Restaurants, pickup orders (eat-in has no commission: buyers pay the restaurant's own price). */
+  pickupCommission: number;
   /** Smallest payout a seller can ask for, in cents. */
   minPayout: number;
+  /**
+   * Biggest single payout the admin can send with the "Send by MoMo" button, in cents.
+   * Bigger amounts must be sent by hand and recorded. 0 switches the button off.
+   */
+  maxMomoSend: number;
+}
+
+/** Can the admin send payouts by MTN MoMo from the dashboard? */
+export interface MomoSendInfo {
+  /** MTN Disbursements keys are set on the server. */
+  configured: boolean;
+  /** Biggest single send, in cents (0 = switched off). */
+  cap: number;
+  /** "sandbox" while testing (no real money). */
+  environment: string;
+  currency: string;
+}
+
+/** What happened when the admin pressed "Send by MoMo". */
+export interface MomoSendResult {
+  status: "successful" | "pending" | "failed";
+  /** MTN's transaction ID once it went through. */
+  transactionId: string | null;
+  message: string;
 }
 
 export interface WalletEntry {
@@ -606,14 +778,54 @@ export interface Wallet {
   payoutDetails: PayoutDetails | null;
   minPayout: number;
   commission: number;
+  payoutSchedule: PayoutSchedule;
   entries: WalletEntry[];
   payouts: Payout[];
 }
 
+export type PayoutSchedule = "daily" | "weekly" | "monthly" | "on_request";
+
 export interface ShopBalance {
   shop: ShopSummary;
+  /** What YanaBuy owes this shop right now. */
   balance: number;
   owner: string;
+  schedule: PayoutSchedule;
+  payoutDetails: PayoutDetails | null;
+  lastPaidAt: string | null;
+  /** Payment is due by its schedule (or the shop asked for a payout). */
+  due: boolean;
+  /** A payout the shop asked for and is waiting on. */
+  requested: number;
+  /** For the chosen period: delivered orders, what buyers paid for the items, YanaBuy's commission, what the shop earned, and what was paid out. */
+  period: { orders: number; sales: number; commission: number; earned: number; paidOut: number };
+}
+
+export interface RiderEarningEntry {
+  id: string;
+  type: "trip" | "payout" | "adjustment";
+  amount: number;
+  orderNumber: string | null;
+  reference: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+/** A rider's delivery pay: they earn the full delivery fee of each delivered trip. */
+export interface RiderEarnings {
+  rider: PersonContact;
+  /** What YanaBuy owes this rider right now. */
+  owed: number;
+  today: { trips: number; earned: number };
+  period: { trips: number; earned: number; paidOut: number };
+  lastPaidAt: string | null;
+}
+
+/** What a rider sees about their own pay. */
+export interface MyRiderEarnings {
+  owed: number;
+  today: { trips: number; earned: number };
+  entries: RiderEarningEntry[];
 }
 
 export interface RiderCash {
@@ -629,6 +841,7 @@ export interface MoneyOverview {
   /** Discount-code money YanaBuy paid on orders delivered this month. */
   discountsThisMonth: number;
   owedToSellers: number;
+  owedToRiders: number;
   cashWithRiders: number;
   payoutsWaiting: { count: number; amount: number };
   paidOutThisMonth: number;
@@ -810,15 +1023,11 @@ export interface RiderApplicationInput {
   plateNumber?: string | null;
   city: string;
   areas: string;
-  idType: IdDocumentType;
-  idFrontKey: string;
-  idBackKey?: string | null;
-  selfieKey: string;
-  licenseKey?: string | null;
   emergencyName: string;
   emergencyPhone: string;
 }
 
+/** ID photos from older rider applications (new applications don't ask for ID — a confirmed email is enough). */
 export interface RiderDocuments {
   idType: IdDocumentType;
   idFrontUrl: string;
@@ -839,16 +1048,15 @@ export interface RiderApplication {
   statusReason: string | null;
   submittedAt: string;
   reviewedAt: string | null;
-  documents: RiderDocuments;
+  /** null for applications made without ID photos. */
+  documents: RiderDocuments | null;
 }
 
-/** The applicant's own view: includes the photo keys so a sent-back form can be sent again unchanged. */
-export interface MyRiderApplication extends RiderApplication {
-  keys: { idFrontKey: string; idBackKey: string | null; selfieKey: string; licenseKey: string | null };
-}
+/** The applicant's own view. */
+export type MyRiderApplication = RiderApplication;
 
 export interface AdminRiderApplication extends RiderApplication {
-  user: { id: string; fullName: string; phone: string; avatarUrl: string | null; role: UserRole; status: UserStatus; createdAt: string };
+  user: { id: string; fullName: string; phone: string | null; email: string | null; emailVerified: boolean; avatarUrl: string | null; role: UserRole; status: UserStatus; createdAt: string };
   reviewedBy: { id: string; fullName: string } | null;
 }
 
@@ -996,7 +1204,7 @@ export interface Booking {
   statusNote: string | null;
   product: { id: string; name: string } | null;
   shop: ShopSummary & { phone: string; address: string };
-  buyer: { id: string; fullName: string; phone: string; avatarUrl: string | null };
+  buyer: { id: string; fullName: string; phone: string | null; avatarUrl: string | null };
   createdAt: string;
   respondedAt: string | null;
 }
@@ -1087,7 +1295,17 @@ export type PortfolioInput = Pick<PortfolioItem, "title"> & Partial<Pick<Portfol
 
 // ─── Admin messages ───────────────────────────────────────────────────────
 
-export type BroadcastAudience = "everyone" | "buyers" | "vendors" | "riders" | "user";
+/** "people" = several picked by hand; "online_riders" = riders online right now; "user" = one person (older messages). */
+export type BroadcastAudience = "everyone" | "buyers" | "vendors" | "riders" | "online_riders" | "people" | "user";
+
+/** Only people whose last known spot is within radiusKm of a shop. */
+export interface BroadcastNear {
+  shopId: string;
+  radiusKm: number;
+}
+
+/** Rough price of one text through Twilio, in US dollars (check Twilio's price list; it changes). */
+export const SMS_PRICE_USD: Record<"LR" | "US", number> = { LR: 0.27, US: 0.01 };
 
 export interface BroadcastChannels {
   /** The bell in the apps, plus a phone notification. */
@@ -1104,8 +1322,14 @@ export interface BroadcastInput {
   audience: BroadcastAudience;
   /** For audience "user". */
   userId?: string | null;
+  /** For audience "people" (up to 500). */
+  userIds?: string[] | null;
   /** Only people in this country (null = both). */
   country?: Country | null;
+  /** Only people near a shop (not for "people"/"user"). */
+  near?: BroadcastNear | null;
+  /** Marked URGENT everywhere, and sent as a high-priority phone notification. */
+  urgent?: boolean;
   channels: BroadcastChannels;
 }
 
@@ -1117,10 +1341,14 @@ export interface Broadcast {
   audience: BroadcastAudience;
   country: Country | null;
   user: { id: string; fullName: string } | null;
+  near: { shopId: string; shopName: string; radiusKm: number } | null;
+  urgent: boolean;
   channels: BroadcastChannels;
   recipients: number;
   emailsSent: number;
   smsSent: number;
+  /** Texts Twilio refused (bad number, no credit, blocked…). */
+  smsFailed: number;
   status: "sending" | "sent";
   sentBy: { id: string; fullName: string } | null;
   createdAt: string;
@@ -1131,8 +1359,14 @@ export interface Broadcast {
 export interface BroadcastPreview {
   recipients: number;
   withEmail: number;
-  /** Everyone has a phone; SMS goes to all of them when SMS is switched on. */
+  /** People with a phone number (texts go to these). */
   withPhone: number;
+  /** The text exactly as phones will get it (when a title is given). */
+  smsSample: string | null;
+  /** Rough cost of texting everyone, in US dollars. */
+  smsCostUsd: number;
+  /** The shop the "near" filter measures from, and whether it has a map spot. */
+  nearShop: { id: string; name: string; located: boolean } | null;
   emailOn: boolean;
   smsOn: boolean;
 }

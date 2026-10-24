@@ -136,7 +136,7 @@ export default function PeoplePage() {
                       </span>
                     </button>
                   </td>
-                  <td className="px-3 py-3 text-soft">{formatLiberianPhone(u.phone)}</td>
+                  <td className="px-3 py-3 text-soft">{u.phone ? formatLiberianPhone(u.phone) : <span className="text-muted">{u.email ?? "—"}</span>}</td>
                   <td className="px-3 py-3">{ROLE_LABEL[u.role]}</td>
                   <td className="px-3 py-3 text-muted">{when(u.createdAt)}</td>
                   <td className="px-3 py-3">{u.status === "blocked" ? <Badge tone="danger">Blocked</Badge> : <Badge tone="success">Active</Badge>}</td>
@@ -179,10 +179,15 @@ export default function PeoplePage() {
             id={selectedId}
             isMe={selectedId === me?.id}
             onChanged={(updated) => setRows((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))}
+            onDeleted={(deletedId) => {
+              setRows((prev) => prev.filter((r) => r.id !== deletedId));
+              setTotal((t) => Math.max(0, t - 1));
+              setSelectedId(null);
+            }}
           />
         ) : (
           <div className="rounded-[20px] border border-dashed border-line-strong bg-white/60 p-8 text-center text-sm text-muted">
-            Pick someone from the list to see their details, change their role or block them.
+            Pick someone from the list to see their details, change their role, block or delete them.
           </div>
         )}
       </div>
@@ -190,7 +195,7 @@ export default function PeoplePage() {
   );
 }
 
-function PersonPanel({ id, isMe, onChanged }: { id: string; isMe: boolean; onChanged: (u: AdminUser) => void }) {
+function PersonPanel({ id, isMe, onChanged, onDeleted }: { id: string; isMe: boolean; onChanged: (u: AdminUser) => void; onDeleted: (id: string) => void }) {
   const [person, setPerson] = useState<AdminUser | null>(null);
   const [shop, setShop] = useState<Shop | null>(null);
   const [reason, setReason] = useState("");
@@ -231,6 +236,28 @@ function PersonPanel({ id, isMe, onChanged }: { id: string; isMe: boolean; onCha
 
   const blocked = person.status === "blocked";
 
+  async function remove() {
+    if (!person) return;
+    const typed = prompt(
+      `Delete ${person.fullName}'s account for good?\n\nThey'll be signed out and can't log in again${shop ? `, and their ${shop.kind === "restaurant" ? "restaurant" : "shop"} "${shop.name}" will close` : ""}. Past orders stay in the records without their name, phone or email. This can't be undone.\n\nType DELETE to confirm.`
+    );
+    if (typed === null) return;
+    if (typed.trim().toUpperCase() !== "DELETE") {
+      setError("Not deleted — type DELETE to confirm.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.admin.deleteUser(person.id);
+      onDeleted(person.id);
+    } catch (err) {
+      setError(messageOf(err));
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="flex flex-col gap-4 rounded-[20px] border border-line bg-white p-[22px]" aria-label={`${person.fullName} details`}>
       <div className="flex items-center gap-3">
@@ -238,7 +265,7 @@ function PersonPanel({ id, isMe, onChanged }: { id: string; isMe: boolean; onCha
         <div className="min-w-0">
           <p className="truncate font-display text-lg font-extrabold">{person.fullName}</p>
           <p className="text-[12.5px] text-muted">
-            {formatLiberianPhone(person.phone)}
+            {person.phone ? `${formatLiberianPhone(person.phone)}${person.phoneVerified ? " ✓" : ""}` : "No phone number"}
             {person.city ? ` · ${person.city}` : ""}
           </p>
           {person.email && <p className="truncate text-[12.5px] text-muted">{person.email}{person.emailVerified ? " ✓" : " (not confirmed)"}</p>}
@@ -331,6 +358,15 @@ function PersonPanel({ id, isMe, onChanged }: { id: string; isMe: boolean; onCha
             </Button>
           </>
         ))}
+
+      {!isMe && (
+        <div className="mt-2 flex flex-col gap-2 border-t border-line pt-4">
+          <p className="text-[12.5px] text-muted">Deleting removes the account for good. Their phone number and email can be used to sign up again.</p>
+          <Button variant="danger" busy={busy} onClick={remove}>
+            Delete this account
+          </Button>
+        </div>
+      )}
     </section>
   );
 }

@@ -40,6 +40,15 @@ export function ShopCard({ shop }: { shop: PublicShop }) {
           // eslint-disable-next-line @next/next/no-img-element
           <img src={shop.coverUrl} alt="" className="h-full w-full object-cover" />
         )}
+        <span className="absolute right-3 top-3 rounded-full bg-white/95 px-2.5 py-1 text-[12px] font-extrabold text-ink shadow-sm">
+          {shop.rating ? (
+            <>
+              <span className="text-amber">★</span> {shop.rating.toFixed(1)} <span className="font-semibold text-muted">({shop.ratingCount})</span>
+            </>
+          ) : (
+            "New"
+          )}
+        </span>
         <div className="absolute -bottom-6 left-4 rounded-[18px] bg-white p-1 shadow-sm">
           <ShopLogo name={shop.name} url={shop.logoUrl} size={52} />
         </div>
@@ -48,7 +57,6 @@ export function ShopCard({ shop }: { shop: PublicShop }) {
         <span className="truncate font-bold group-hover:text-purple">{shop.name}</span>
         <span className="text-[12.5px] font-semibold text-soft">
           {shop.category?.name ?? SHOP_KIND_LABEL[shop.kind]}
-          {shop.rating ? ` · ★ ${shop.rating.toFixed(1)} (${shop.ratingCount})` : ""}
         </span>
         <span className="line-clamp-2 text-[12.5px] text-muted">📍 {[shop.address, shop.city].filter((v, i, a) => v && a.indexOf(v) === i).join(", ")}</span>
         <span className="mt-auto pt-1 text-[12.5px] text-muted">

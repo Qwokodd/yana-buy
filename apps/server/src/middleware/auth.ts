@@ -1,4 +1,4 @@
-import { needsEmail } from "../lib/email-codes";
+import { emailReady } from "../lib/outbound";
 import type { Request, Response, NextFunction } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client";
@@ -70,12 +70,14 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
 }
 
 /**
- * Checkout, opening a shop, bookings and requests need a confirmed email once
- * email sending is set up (so people get their receipts and updates).
+ * Opening a shop and applying to ride need a confirmed email (once email sending is
+ * set up). Buyers never need to confirm anything to browse or order.
  */
-export function requireEmail(req: Request, _res: Response, next: NextFunction) {
-  if (req.user && needsEmail(req.user)) {
-    throw new HttpError(403, "Confirm your email address first — we send your order and account updates there.", { email: "needs_email" });
+export function requireConfirmedEmail(req: Request, _res: Response, next: NextFunction) {
+  if (req.user && emailReady() && !req.user.emailVerifiedAt) {
+    throw new HttpError(403, "Confirm your email address first — sellers and riders need a confirmed email.", { email: "needs_email" });
   }
   next();
 }
+/** @deprecated use requireConfirmedEmail. */
+export const requireEmail = requireConfirmedEmail;

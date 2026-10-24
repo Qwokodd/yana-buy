@@ -2,19 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
-import {
-  ApiError,
-  formatLiberianPhone,
-  ID_TYPE_LABEL,
-  RIDER_NEEDS_LICENSE,
-  RIDER_VEHICLE_LABEL,
-  type IdDocumentType,
-  type MyRiderApplication,
-  type PrivateUpload,
-  type RiderVehicle,
-} from "@yanabuy/shared";
+import { ApiError, formatLiberianPhone, RIDER_NEEDS_LICENSE, RIDER_VEHICLE_LABEL, type MyRiderApplication, type RiderVehicle } from "@yanabuy/shared";
 import { BackBar } from "@/components/Products";
-import { PrivatePhotoSlot } from "@/components/PhotoSlot";
+import { ConfirmEmailFirst } from "@/components/LoginCode";
 import { Button, Card, Field, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -47,7 +37,7 @@ export default function RideScreen() {
     body = (
       <Card style={{ gap: 12 }}>
         <Text style={{ fontFamily: font.regular, fontSize: 14, color: colors.textSoft, lineHeight: 20 }}>
-          Create a YanaBuy account with your phone number, then send your details, ID and a selfie. When we approve you, deliveries show here in the app.
+          Create a YanaBuy account with your phone number, then confirm your email and send your details. When we approve you, deliveries show here in the app.
         </Text>
         <Button title="Create an account" onPress={() => router.push("/register")} />
         <Button title="Log in" variant="outline" onPress={() => router.push("/login")} />
@@ -68,7 +58,7 @@ export default function RideScreen() {
     body =
       application.status === "pending" ? (
         <Status tone={colors.amber} title="Thanks — we're checking your application">
-          <Text style={{ fontFamily: font.regular, fontSize: 14, color: colors.textSoft }}>The YanaBuy team looks at your ID and details, usually within 1–2 working days.</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 14, color: colors.textSoft }}>The YanaBuy team looks at your details, usually within 1–2 working days.</Text>
         </Status>
       ) : application.status === "rejected" ? (
         <Status tone={colors.danger} title="Please fix your application">
@@ -137,7 +127,9 @@ function Chip({ on, label, onPress }: { on: boolean; label: string; onPress: () 
 }
 
 function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; onSent: (a: MyRiderApplication) => void }) {
-  const doc = (key: string | null | undefined, url: string | null | undefined): PrivateUpload | null => (key && url ? { key, url } : null);
+  const { user, setUser } = useAuth();
+  // Riders need a confirmed email (no ID photos any more).
+  const needsEmail = !!user && !user.emailVerified && (user.canVerifyBy ?? []).includes("email");
   const [vehicle, setVehicle] = useState<RiderVehicle | null>(initial?.vehicle ?? null);
   const [form, setForm] = useState({
     plateNumber: initial?.plateNumber ?? "",
@@ -146,11 +138,6 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
     emergencyName: initial?.emergencyName ?? "",
     emergencyPhone: initial ? formatLiberianPhone(initial.emergencyPhone) : "",
   });
-  const [idType, setIdType] = useState<IdDocumentType>(initial?.documents.idType ?? "national_id");
-  const [front, setFront] = useState(doc(initial?.keys.idFrontKey, initial?.documents.idFrontUrl));
-  const [back, setBack] = useState(doc(initial?.keys.idBackKey, initial?.documents.idBackUrl));
-  const [selfie, setSelfie] = useState(doc(initial?.keys.selfieKey, initial?.documents.selfieUrl));
-  const [license, setLicense] = useState(doc(initial?.keys.licenseKey, initial?.documents.licenseUrl));
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -166,18 +153,11 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
     setForm((f) => ({ ...f, [k]: v }));
     clear(k);
   };
-  const clearing = (setter: (v: PrivateUpload | null) => void, k: string) => (v: PrivateUpload | null) => {
-    setter(v);
-    clear(k);
-  };
 
   async function submit() {
     const f: Record<string, string> = {};
     if (!vehicle) f.vehicle = "Choose how you'll deliver";
-    if (!front) f.idFrontKey = "Add a photo of your ID";
-    if (idType !== "passport" && !back) f.idBackKey = "Add a photo of the back of your ID";
-    if (!selfie) f.selfieKey = "Add a selfie holding your ID";
-    if (motor && !license) f.licenseKey = "Add a photo of your driver's licence";
+    if (needsEmail) f.email = "Confirm your email first";
     if (!agreed) f.agreed = "Please confirm";
     if (Object.keys(f).length) {
       setFields(f);
@@ -193,11 +173,6 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
         plateNumber: motor ? form.plateNumber || null : null,
         city: form.city,
         areas: form.areas,
-        idType,
-        idFrontKey: front!.key,
-        idBackKey: idType === "passport" ? null : (back?.key ?? null),
-        selfieKey: selfie!.key,
-        licenseKey: motor ? (license?.key ?? null) : null,
         emergencyName: form.emergencyName,
         emergencyPhone: form.emergencyPhone,
       });
@@ -214,6 +189,17 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
   return (
     <Card style={{ gap: 14 }}>
       {initial?.status === "rejected" && initial.statusReason && <Notice tone="info">{`What to fix: ${initial.statusReason}`}</Notice>}
+      {user && needsEmail && (
+        <ConfirmEmailFirst
+          user={user}
+          who="riders"
+          error={fields.email}
+          onDone={(u) => {
+            setUser(u);
+            clear("email");
+          }}
+        />
+      )}
       <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>How will you deliver?</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup">
         {VEHICLES.map((v) => (
@@ -224,7 +210,6 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
             onPress={() => {
               setVehicle(v);
               clear("vehicle");
-              clear("licenseKey");
               clear("plateNumber");
             }}
           />
@@ -235,30 +220,6 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
       <Field label="City or town" value={form.city} onChangeText={set("city")} error={fields.city} placeholder="Monrovia" />
       <Field label="Areas you can cover" value={form.areas} onChangeText={set("areas")} error={fields.areas} hint="e.g. Sinkor, Congo Town, Paynesville" maxLength={300} />
 
-      <Notice tone="info">We check the ID of every rider. Your photos are private: only you and YanaBuy admins see them.</Notice>
-      <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>Type of ID</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {(Object.keys(ID_TYPE_LABEL) as IdDocumentType[]).map((t) => (
-          <Chip key={t} on={idType === t} label={ID_TYPE_LABEL[t]} onPress={() => {
-              setIdType(t);
-              clear("idBackKey");
-            }} />
-        ))}
-      </View>
-      <PrivatePhotoSlot
-        label={idType === "passport" ? "Passport photo page" : "Front of your ID"}
-        hint="All four corners in the photo, no glare."
-        value={front}
-        onChange={clearing(setFront, "idFrontKey")}
-        error={fields.idFrontKey}
-      />
-      {idType !== "passport" && <PrivatePhotoSlot label="Back of your ID" value={back} onChange={clearing(setBack, "idBackKey")} error={fields.idBackKey} />}
-      {motor && (
-        <PrivatePhotoSlot label="Driver's licence" hint="The side with your photo and licence number." value={license} onChange={clearing(setLicense, "licenseKey")} error={fields.licenseKey} />
-      )}
-      <View style={{ width: "62%" }}>
-        <PrivatePhotoSlot label="Selfie holding your ID" hint="Your face and the ID both clear." value={selfie} onChange={clearing(setSelfie, "selfieKey")} shape="portrait" front error={fields.selfieKey} />
-      </View>
       <Field label="Emergency contact name" value={form.emergencyName} onChangeText={set("emergencyName")} error={fields.emergencyName} placeholder="Someone we can call" />
       <Field label="Emergency contact phone" value={form.emergencyPhone} onChangeText={set("emergencyPhone")} error={fields.emergencyPhone} keyboardType="phone-pad" placeholder="0886 000 000" />
       <Pressable
@@ -274,7 +235,7 @@ function ApplyForm({ initial, onSent }: { initial: MyRiderApplication | null; on
           {agreed && <Text style={{ color: "#fff", fontSize: 13, fontFamily: font.bold }}>✓</Text>}
         </View>
         <Text style={{ flex: 1, fontFamily: font.regular, fontSize: 13.5, color: colors.ink }}>
-          This is my own ID and my details are true. I&apos;ll deliver safely and hand in cash from cash orders.
+          My details are true. I&apos;ll deliver safely and hand in cash from cash orders.
         </Text>
       </Pressable>
       {error && <Notice>{error}</Notice>}

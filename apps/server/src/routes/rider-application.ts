@@ -6,18 +6,13 @@ import { db } from "../db/client";
 import { riderApplications, shops } from "../db/schema";
 import { HttpError, parse } from "../lib/http";
 import { myRiderApplication } from "../lib/riders";
-import { optionalText, phone, privateKey, requiredText } from "../lib/validation";
-import { requireAuth, requireEmail } from "../middleware/auth";
+import { optionalText, phone, requiredText } from "../lib/validation";
+import { requireAuth, requireConfirmedEmail } from "../middleware/auth";
 import { notifyAdmins } from "../lib/notify";
 
 /** Applying to deliver for YanaBuy. Mounted at /api/rider-application. */
 export const riderApplicationRouter = Router();
 riderApplicationRouter.use(requireAuth);
-
-const optionalKey = z
-  .string()
-  .nullish()
-  .transform((v) => v || null);
 
 const applicationSchema = z
   .object({
@@ -25,27 +20,12 @@ const applicationSchema = z
     plateNumber: optionalText(20, "Plate number"),
     city: requiredText(2, 60, "City"),
     areas: requiredText(3, 300, "Areas you can cover"),
-    idType: z.enum(["national_id", "passport", "drivers_license", "voter_card"], { errorMap: () => ({ message: "Choose the type of ID" }) }),
-    idFrontKey: privateKey("a photo of the front of your ID"),
-    idBackKey: optionalKey,
-    selfieKey: privateKey("a selfie"),
-    licenseKey: optionalKey,
     emergencyName: requiredText(2, 80, "Emergency contact name"),
     emergencyPhone: phone,
   })
-  .strict()
+  // No ID photos any more (older apps may still send them: they're ignored).
   .superRefine((v, ctx) => {
-    if (v.idType !== "passport" && !v.idBackKey) {
-      ctx.addIssue({ code: "custom", path: ["idBackKey"], message: "Upload a photo of the back of your ID" });
-    }
-    if (v.idBackKey && !privateKey("").safeParse(v.idBackKey).success) {
-      ctx.addIssue({ code: "custom", path: ["idBackKey"], message: "Upload the back of your ID again" });
-    }
     const motor = RIDER_NEEDS_LICENSE.includes(v.vehicle);
-    if (motor && !v.licenseKey) ctx.addIssue({ code: "custom", path: ["licenseKey"], message: "Upload a photo of your driver's licence" });
-    if (v.licenseKey && !privateKey("").safeParse(v.licenseKey).success) {
-      ctx.addIssue({ code: "custom", path: ["licenseKey"], message: "Upload your licence again" });
-    }
     if (motor && !v.plateNumber) ctx.addIssue({ code: "custom", path: ["plateNumber"], message: "Enter the plate number" });
   });
 
@@ -60,7 +40,7 @@ riderApplicationRouter.get("/", async (req, res) => {
 });
 
 /** Send (or re-send after changes were asked for) a rider application. */
-riderApplicationRouter.post("/", requireEmail, async (req, res) => {
+riderApplicationRouter.post("/", requireConfirmedEmail, async (req, res) => {
   const user = req.user!;
   const existing = await mine(user.id);
   if (existing?.status === "approved" || user.role === "rider") throw new HttpError(400, "You're already a YanaBuy rider.");
@@ -74,9 +54,8 @@ riderApplicationRouter.post("/", requireEmail, async (req, res) => {
   const input = parse(applicationSchema, req.body);
   const values = {
     ...input,
-    // Only motor vehicles have plates and licences.
+    // Only motor vehicles have plates.
     plateNumber: input.vehicle === "bicycle" || input.vehicle === "on_foot" ? null : input.plateNumber,
-    licenseKey: input.vehicle === "bicycle" || input.vehicle === "on_foot" ? null : input.licenseKey,
     status: "pending" as const,
     statusReason: null,
     submittedAt: new Date(),

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { buyerPrice } from "../lib/finance";
 import { z } from "zod";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "../db/client";
@@ -29,6 +30,12 @@ const fields = {
   categoryId: z.string({ required_error: "Choose a category" }).uuid("Choose a category"),
   price: money("Price").optional(),
   compareAtPrice: money("Old price").nullish().transform((v) => v ?? null),
+  /** Flash sale: the old price comes back at this time (null = the sale has no end). */
+  saleEndsAt: z.coerce
+    .date({ invalid_type_error: "Choose when the sale ends" })
+    .refine((d) => d.getTime() > Date.now(), "The sale must end in the future")
+    .refine((d) => d.getTime() < Date.now() + 31 * 86400_000, "A flash sale can last up to a month")
+    .nullish(),
   stock: z
     .number()
     .int("Stock must be a whole number")
@@ -48,6 +55,14 @@ const fields = {
     .max(120, "At most 120 days")
     .nullish()
     .transform((v) => (v === undefined ? undefined : v)),
+  /** Weight of one, in grams. */
+  weightGrams: z
+    .number()
+    .int("Weight must be in whole grams")
+    .min(1, "Weight must be more than 0")
+    .max(1_000_000, "That's too heavy (1 tonne max)")
+    .nullish()
+    .transform((v) => (v === undefined ? undefined : v)),
   bookable: z.boolean().optional(),
   durationMinutes: z.number().int().min(15, "At least 15 minutes").max(600, "At most 10 hours").nullish().transform((v) => (v === undefined ? undefined : v)),
   options: optionsSchema.optional(),
@@ -65,6 +80,9 @@ const createSchema = z
     }
     if (v.compareAtPrice !== null && v.compareAtPrice <= v.price) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["compareAtPrice"], message: "The old price must be higher than the price" });
+    }
+    if (v.saleEndsAt && v.compareAtPrice === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["saleEndsAt"], message: "Add the old price first — that's the price that comes back when the sale ends" });
     }
   });
 
@@ -177,6 +195,10 @@ shopProductsRouter.patch("/:id", async (req, res) => {
     if (compare !== null && compare <= price) {
       throw new HttpError(400, "The old price must be higher than the price", { compareAtPrice: "Must be higher than the price" });
     }
+    const ends = input.saleEndsAt !== undefined ? input.saleEndsAt : product.saleEndsAt;
+    if (ends && compare === null) {
+      throw new HttpError(400, "Add the old price first — that's the price that comes back when the sale ends", { saleEndsAt: "Needs an old price" });
+    }
   }
 
   const next = { ...input, options: variantPart?.options };
@@ -206,7 +228,7 @@ shopProductsRouter.patch("/:id", async (req, res) => {
     const usd = (c: number) => `$${(c / 100).toFixed(2).replace(/\.00$/, "")}`;
     notify(
       fans.map((f) => f.userId),
-      { type: "price_drop", title: `Price drop: ${fresh.product.name}`, body: `Now ${usd(fresh.product.price)} (was ${usd(product.price)}) at ${shop.name}`, link: `/p/${product.id}` }
+      { type: "price_drop", title: `Price drop: ${fresh.product.name}`, body: `Now ${usd(buyerPrice(fresh.product.price, product.kind))} (was ${usd(buyerPrice(product.price, product.kind))}) at ${shop.name}`, link: `/p/${product.id}` }
     );
   }
   if (needsReview && product.status !== "pending") notifyAdmins({ title: `Changed ${product.kind === "food" ? "dish" : "product"} to review: ${fresh.product.name}`, body: shop.name, path: "/products" });

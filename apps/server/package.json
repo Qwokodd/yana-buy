@@ -11,7 +11,8 @@
     "create-admin": "tsx src/scripts/create-admin.ts",
     "import-shopify": "tsx src/scripts/import-shopify.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test src/**/*.test.ts",
+    "test-sms": "tsx src/scripts/test-sms.ts"
   },
   "dependencies": {
     "@yanabuy/shared": "*",

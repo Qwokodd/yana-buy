@@ -1,4 +1,12 @@
 import type {
+  MyRiderEarnings,
+  PayoutSchedule,
+  RiderEarningEntry,
+  RiderEarnings,
+  AdminMap,
+  GeoPoint,
+  NearbyRider,
+  OpenJob,
   Booking,
   BookingInput,
   BookingSettings,
@@ -32,6 +40,8 @@ import type {
   SourcingStatus,
   AdminBanner,
   FinanceSettings,
+  MomoSendInfo,
+  MomoSendResult,
   MoneyOverview,
   Payment,
   Payout,
@@ -54,6 +64,9 @@ import type {
   AdminUser,
   AuditEntry,
   AuthResponse,
+  LoginChallenge,
+  LoginChannel,
+  LoginResult,
   Banner,
   BannerInput,
   Branding,
@@ -81,8 +94,14 @@ import type {
   PortfolioInput,
   PortfolioItem,
   WorkProfile,
+  Fulfilment,
 } from "./types";
+import { needsCode } from "./types";
 import type { Country } from "./country";
+import type { DeliveryPricing } from "./delivery-fee";
+
+/** Period for the admin's "who we owe" figures. */
+export type OwedPeriod = "today" | "week" | "month" | "all";
 
 /** Where each app keeps its login tokens (localStorage on web, SecureStore on the phone). */
 export interface TokenStore {
@@ -111,9 +130,19 @@ export interface ApiOptions {
   onSessionEnded?: () => void;
   /** The country picked with the country switch; sent with every request so lists only show that country. */
   country?: () => string | null | undefined;
+  /** Where the app keeps its "trusted device" token (skips the login code for 30 days). Optional. */
+  device?: DeviceStore;
+  /** Food mode: how the buyer will get their food (delivery, pickup or eat_in). Food prices depend on it. */
+  foodHow?: () => string | null | undefined;
 }
 
-export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptions) {
+/** Keeps the "trust this device" token. It survives logging out (that's the point). */
+export interface DeviceStore {
+  get(): Promise<string | null>;
+  set(token: string): Promise<void>;
+}
+
+export function createApi({ baseUrl, tokens, onSessionEnded, country, device, foodHow }: ApiOptions) {
   const root = baseUrl.replace(/\/$/, "");
   let refreshing: Promise<string | null> | null = null;
 
@@ -145,6 +174,8 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
       const c = country?.();
       if (c) headers["X-Country"] = c;
+      const how = foodHow?.();
+      if (how) headers["X-Food-How"] = how;
       return fetch(`${root}${path}`, {
         method,
         headers,
@@ -186,19 +217,38 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
 
   const saveSession = async (res: AuthResponse) => {
     await tokens.set({ accessToken: res.accessToken, refreshToken: res.refreshToken });
+    if (res.deviceToken) await device?.set(res.deviceToken).catch(() => {});
     return res;
   };
+  /** Login and sign-up either finish (tokens) or ask for a code first. */
+  const saveIfDone = async (res: LoginResult) => (needsCode(res) ? res : saveSession(res));
 
   return {
     auth: {
-      register: (input: { fullName: string; phone: string; password: string; email: string; city?: string }) =>
-        request<AuthResponse>("POST", "/api/auth/register", input, false).then(saveSession),
-      login: (input: { phone: string; password: string }) =>
-        request<AuthResponse>("POST", "/api/auth/login", input, false).then(saveSession),
-      /** Forgot password: sends a 6-digit code to the account's email and/or phone. */
-      forgotPassword: (phone: string) => request<{ ok: true }>("POST", "/api/auth/forgot-password", { phone }, false),
+      /**
+       * Sign up with a phone number or an email (or both). Usually logs straight in; signing up
+       * with a number from the old store asks for a code first (finish with verifyLogin).
+       */
+      register: (input: { fullName: string; phone?: string; email?: string; password: string; city?: string }) =>
+        request<LoginResult>("POST", "/api/auth/register", input, false).then(saveIfDone),
+      /**
+       * Log in with a phone number or an email (`login`) and the password. Usually answers with a
+       * code challenge (a 6-digit code went by text or email) — finish with verifyLogin.
+       */
+      login: async (input: { login: string; password: string } | { phone: string; password: string }) => {
+        const deviceToken = (await device?.get().catch(() => null)) ?? undefined;
+        return request<LoginResult>("POST", "/api/auth/login", { ...input, deviceToken }, false).then(saveIfDone);
+      },
+      /** Second step: the 6-digit code. `trustDevice` skips the code on this device for 30 days (not for admins). */
+      verifyLogin: (input: { challengeId: string; code: string; trustDevice?: boolean }) =>
+        request<AuthResponse>("POST", "/api/auth/login/verify", input, false).then(saveSession),
+      /** A new code — the same way, or the other way ("text me instead" / "email me instead"). */
+      resendLoginCode: (challengeId: string, channel?: LoginChannel) =>
+        request<LoginChallenge>("POST", "/api/auth/login/resend", { challengeId, channel }, false),
+      /** Forgot password: texts a 6-digit code to the phone, or emails it — whichever they typed. */
+      forgotPassword: (login: string) => request<{ ok: true }>("POST", "/api/auth/forgot-password", { login }, false),
       /** Sets a new password with the code, and logs in (other devices are logged out). */
-      resetPassword: (input: { phone: string; code: string; password: string }) =>
+      resetPassword: (input: { login: string; code: string; password: string }) =>
         request<AuthResponse>("POST", "/api/auth/reset-password", input, false).then(saveSession),
       logout: async () => {
         const current = await tokens.get();
@@ -211,11 +261,17 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
 
     me: {
       get: () => request<{ user: User }>("GET", "/api/me"),
+      /** Where the person is now (from the phone's GPS or the browser). */
+      setLocation: (p: GeoPoint) => request<{ ok: true }>("PUT", "/api/me/location", p),
       update: (input: { fullName?: string; city?: string | null; avatarUrl?: string | null }) =>
         request<{ user: User }>("PATCH", "/api/me", input),
       /** Emails a 6-digit code to a new address (or the current one again, if no address is given). */
       sendEmailCode: (email?: string) => request<{ sent: boolean; email: string }>("POST", "/api/me/email", email ? { email } : {}),
       verifyEmail: (code: string) => request<{ user: User }>("POST", "/api/me/email/verify", { code }),
+      /** Texts a 6-digit code to a new number (or the current one again, if none is given). */
+      sendPhoneCode: (phone?: string) => request<{ sent: boolean; phone: string }>("POST", "/api/me/phone", phone ? { phone } : {}),
+      /** Confirms the number; a new number replaces the old one (and is used to log in). */
+      verifyPhone: (code: string) => request<{ user: User }>("POST", "/api/me/phone/verify", { code }),
       changePassword: (input: { currentPassword: string; newPassword: string }) =>
         request<void>("POST", "/api/me/password", input),
       /** Orders from the old Shopify store, matched by phone number. */
@@ -238,6 +294,12 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
         for (const file of files) form.append("images", file as Blob);
         return request<{ urls: string[] }>("POST", "/api/uploads", form);
       },
+      /** Admins: a short (5–10 second) video for a banner or ad. Returns its public URL. */
+      video: (file: UploadFile) => {
+        const form = new FormData();
+        form.append("video", file as Blob);
+        return request<{ url: string }>("POST", "/api/uploads/video", form);
+      },
       /** ID documents and selfies: kept private, returns keys and short-lived preview links. */
       privateImages: (files: UploadFile[]) => {
         const form = new FormData();
@@ -251,7 +313,7 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       portfolio: (slug: string) => request<{ items: PortfolioItem[] }>("GET", `/api/public/shops/${encodeURIComponent(slug)}/portfolio`, undefined, false),
       branding: () => request<{ branding: Branding }>("GET", "/api/public/branding", undefined, false),
       categories: (kind?: CatalogKind) => request<{ items: Category[] }>("GET", `/api/public/categories${qs({ kind })}`, undefined, false),
-      banners: (params: { platform: "web" | "app"; mode?: CatalogKind; placement?: "hero" | "strip" }) =>
+      banners: (params: { platform: "web" | "app"; mode?: CatalogKind; placement?: "hero" | "strip" | "promo" }) =>
         request<{ items: Banner[] }>("GET", `/api/public/banners${qs(params)}`, undefined, false),
       products: (query: ProductQuery = {}) => request<Page<ProductCard>>("GET", `/api/public/products${qs({ ...query })}`, undefined, false),
       product: (id: string) => request<{ product: Product; more: ProductCard[] }>("GET", `/api/public/products/${id}`, undefined, false),
@@ -272,8 +334,23 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
     /** Buying: prices for the cart, checkout and the buyer's orders. */
     orders: {
       /** Prices for the cart. Give the delivery area and a discount code to see them in the total. */
-      quote: (items: CartItem[], opts: { areaId?: string | null; code?: string | null } = {}) => request<{ quote: Quote }>("POST", "/api/cart/quote", { items, ...opts }),
-      place: (input: { items: CartItem[]; delivery: DeliveryDetails; code?: string | null; paymentMethod: PaymentMethod; paymentPhone?: string }) =>
+      quote: (items: CartItem[], opts: { areaId?: string | null; code?: string | null; lat?: number | null; lng?: number | null; fulfilment?: Fulfilment } = {}) => request<{ quote: Quote }>("POST", "/api/cart/quote", { items, ...opts }),
+      place: (input: {
+        items: CartItem[];
+        /** Eat in / pickup: only name, phone and note are needed (city/address can be left empty). */
+        delivery: DeliveryDetails;
+        code?: string | null;
+        paymentMethod: PaymentMethod;
+        paymentPhone?: string;
+        /** Default "delivery". Eat in / pickup = menu price only. */
+        fulfilment?: Fulfilment;
+        /** Eat in / pickup: when the buyer will arrive (ISO). Required for eat in unless a booking is attached. */
+        arriveAt?: string | null;
+        /** Eat in: how many people. */
+        partySize?: number | null;
+        /** Eat in: one of the buyer's table bookings at this restaurant. */
+        bookingId?: string | null;
+      }) =>
         request<{ orders: Order[]; payment: Payment | null }>("POST", "/api/orders", input),
       payment: (id: string) => request<{ payment: Payment }>("GET", `/api/orders/payments/${id}`),
       lastDelivery: () => request<{ delivery: DeliveryDetails | null }>("GET", "/api/orders/last-delivery"),
@@ -313,7 +390,15 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       orders: () => request<{ items: OrderSummary[] }>("GET", "/api/rider/orders"),
       order: (id: string) => request<{ order: Order }>("GET", `/api/rider/orders/${id}`),
       pickedUp: (id: string) => request<{ order: Order }>("POST", `/api/rider/orders/${id}/picked-up`),
+      /** Online = shops nearby can send delivery requests. */
+      setOnline: (online: boolean, at?: GeoPoint | null) => request<{ user: User }>("POST", "/api/rider/online", { online, ...(at ?? {}) }),
+      accept: (id: string) => request<{ order: Order }>("POST", `/api/rider/orders/${id}/accept`),
+      /** Packed orders near the rider that nobody has taken yet (only while online). */
+      openJobs: () => request<{ items: OpenJob[]; radiusKm: number }>("GET", "/api/rider/open"),
+      decline: (id: string, reason?: string) => request<{ ok: true }>("POST", `/api/rider/orders/${id}/decline`, { reason }),
       cash: () => request<{ amount: number; orders: number }>("GET", "/api/rider/cash"),
+      /** Delivery pay: owed now, today's trips, and the list of trips and payments. */
+      earnings: () => request<{ earnings: MyRiderEarnings }>("GET", "/api/rider/earnings"),
       delivered: (id: string, cashCollected: boolean) => request<{ order: Order }>("POST", `/api/rider/orders/${id}/delivered`, { cashCollected }),
     },
 
@@ -327,7 +412,7 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       movePortfolio: (id: string, direction: "up" | "down") => request<{ items: PortfolioItem[] }>("POST", `/api/shop/portfolio/${id}/move`, { direction }),
       mine: () => request<{ shop: MyShop | null }>("GET", "/api/shop/mine"),
       apply: (input: ShopApplication) => request<{ shop: MyShop }>("POST", "/api/shop/apply", input),
-      update: (input: Partial<Pick<Shop, "name" | "description" | "phone" | "city" | "address" | "logoUrl" | "coverUrl" | "categoryId" | "hours">>) =>
+      update: (input: Partial<Pick<Shop, "name" | "description" | "phone" | "city" | "address" | "logoUrl" | "coverUrl" | "categoryId" | "hours" | "eatIn" | "pickup">>) =>
         request<{ shop: MyShop }>("PATCH", "/api/shop/mine", input),
       products: () => request<{ items: MyProduct[] }>("GET", "/api/shop/products"),
       product: (id: string) => request<{ product: MyProduct }>("GET", `/api/shop/products/${id}`),
@@ -339,6 +424,14 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       order: (id: string) => request<{ order: Order }>("GET", `/api/shop/orders/${id}`),
       acceptOrder: (id: string) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/accept`),
       orderReady: (id: string) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/ready`),
+      /** Eat in: the food was served. Pickup: the buyer collected it. (Pay at the restaurant: the shop got the money.) */
+      orderHandedOver: (id: string, cashCollected = false) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/handed-over`, { cashCollected }),
+      /** Online riders near the shop, nearest first. */
+      orderRiders: (id: string) => request<{ riders: NearbyRider[]; radiusKm: number; shopLocation: GeoPoint | null; heavy: boolean }>("GET", `/api/shop/orders/${id}/riders`),
+      offerRider: (id: string, riderId: string) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/offer`, { riderId }),
+      cancelOffer: (id: string) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/cancel-offer`),
+      /** Puts the shop's pin on the map. */
+      setLocation: (p: GeoPoint) => request<{ shop: MyShop }>("PUT", "/api/shop/mine/location", p),
       rejectOrder: (id: string, reason: string) => request<{ order: Order }>("POST", `/api/shop/orders/${id}/reject`, { reason }),
       wallet: () => request<{ wallet: Wallet }>("GET", "/api/shop/wallet"),
       savePayoutDetails: (input: PayoutDetails) => request<{ payoutDetails: PayoutDetails }>("PUT", "/api/shop/wallet/payout-details", input),
@@ -370,6 +463,8 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       setRole: (id: string, role: UserRole) => request<{ user: AdminUser }>("PATCH", `/api/admin/users/${id}/role`, { role }),
       block: (id: string, reason: string) => request<{ user: AdminUser }>("POST", `/api/admin/users/${id}/block`, { reason }),
       unblock: (id: string) => request<{ user: AdminUser }>("POST", `/api/admin/users/${id}/unblock`),
+      /** Deletes the account for good (details wiped if it has past orders). */
+      deleteUser: (id: string) => request<{ deleted: true; erased: boolean }>("DELETE", `/api/admin/users/${id}`),
       auditLog: (page = 1) => request<Page<AuditEntry>>("GET", `/api/admin/audit-log${qs({ page })}`),
 
       shops: (params: { status?: ShopStatus; kind?: ShopKind; q?: string; page?: number; country?: Country } = {}) =>
@@ -385,7 +480,7 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
         request<{ ok: true; owner: { id: string; fullName: string; phone: string } }>("POST", `/api/admin/shops/${id}/handover`, { phone }),
 
       broadcasts: () => request<{ items: Broadcast[] }>("GET", "/api/admin/broadcasts"),
-      previewBroadcast: (input: Pick<BroadcastInput, "audience" | "userId" | "country">) => request<{ preview: BroadcastPreview }>("POST", "/api/admin/broadcasts/preview", input),
+      previewBroadcast: (input: Omit<BroadcastInput, "title" | "body" | "channels"> & Partial<Pick<BroadcastInput, "title" | "body" | "link">>) => request<{ preview: BroadcastPreview }>("POST", "/api/admin/broadcasts/preview", input),
       sendBroadcast: (input: BroadcastInput) => request<{ broadcast: Broadcast }>("POST", "/api/admin/broadcasts", input),
       bookings: (status?: BookingStatus) => request<{ items: Booking[] }>("GET", `/api/admin/bookings${qs({ status })}`),
       discounts: () => request<{ items: DiscountCode[] }>("GET", "/api/admin/discounts"),
@@ -413,6 +508,8 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       assignRider: (id: string, riderId: string | null) => request<{ order: Order }>("POST", `/api/admin/orders/${id}/assign`, { riderId }),
       cancelOrder: (id: string, reason: string) => request<{ order: Order }>("POST", `/api/admin/orders/${id}/cancel`, { reason }),
       riders: () => request<{ items: RiderSummary[] }>("GET", "/api/admin/riders"),
+      map: () => request<AdminMap>("GET", "/api/admin/map"),
+      setRiderRadius: (radiusKm: number) => request<{ radiusKm: number }>("PUT", "/api/admin/rider-radius", { radiusKm }),
       delivery: () => request<{ delivery: DeliverySettings; ready: PaymentMethod[] }>("GET", "/api/admin/settings/delivery"),
       money: () => request<{ overview: MoneyOverview }>("GET", "/api/admin/money"),
       finance: () => request<{ finance: FinanceSettings }>("GET", "/api/admin/settings/finance"),
@@ -420,7 +517,19 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       payouts: (status: "requested" | "paid" | "rejected" | "all" = "requested") => request<{ items: Payout[] }>("GET", `/api/admin/payouts${qs({ status })}`),
       markPayoutPaid: (id: string, reference: string) => request<{ payout: Payout }>("POST", `/api/admin/payouts/${id}/paid`, { reference }),
       rejectPayout: (id: string, reason: string) => request<{ payout: Payout }>("POST", `/api/admin/payouts/${id}/reject`, { reason }),
-      balances: () => request<{ items: ShopBalance[] }>("GET", "/api/admin/balances"),
+      /** Who YanaBuy owes: shops & restaurants, with sales for the period and whether payment is due by their schedule. */
+      owedShops: (period: OwedPeriod = "month") => request<{ items: ShopBalance[] }>("GET", `/api/admin/owed/shops?period=${period}`),
+      setPayoutSchedule: (shopId: string, schedule: PayoutSchedule) => request<{ schedule: PayoutSchedule }>("PUT", `/api/admin/shops/${shopId}/payout-schedule`, { schedule }),
+      /** Record mobile money the admin sent to a shop (with the transaction ID). */
+      payShop: (shopId: string, amount: number, reference: string) => request<{ payout: Payout; balance: number }>("POST", `/api/admin/shops/${shopId}/pay`, { amount, reference }),
+      momoSendInfo: () => request<MomoSendInfo>("GET", "/api/admin/momo-send"),
+      sendShopMomo: (shopId: string, amount: number) => request<MomoSendResult>("POST", `/api/admin/shops/${shopId}/send-momo`, { amount }),
+      sendRiderMomo: (riderId: string, amount: number) => request<MomoSendResult>("POST", `/api/admin/riders/${riderId}/send-momo`, { amount }),
+      owedRiders: (period: OwedPeriod = "month") => request<{ items: RiderEarnings[] }>("GET", `/api/admin/owed/riders?period=${period}`),
+      riderEarnings: (riderId: string) => request<{ owed: number; entries: RiderEarningEntry[] }>("GET", `/api/admin/riders/${riderId}/earnings`),
+      /** Record delivery pay the admin sent to a rider (with the transaction ID). */
+      payRider: (riderId: string, amount: number, reference: string) =>
+        request<{ owed: number; entries: RiderEarningEntry[] }>("POST", `/api/admin/riders/${riderId}/pay`, { amount, reference }),
       shopWallet: (id: string) => request<{ balance: number; entries: WalletEntry[] }>("GET", `/api/admin/shops/${id}/wallet`),
       adjustWallet: (id: string, amount: number, note: string) =>
         request<{ balance: number; entries: WalletEntry[] }>("POST", `/api/admin/shops/${id}/adjust`, { amount, note }),
@@ -428,6 +537,9 @@ export function createApi({ baseUrl, tokens, onSessionEnded, country }: ApiOptio
       cashReceived: (riderId: string, orderIds: string[]) =>
         request<{ received: number; orders: number }>("POST", `/api/admin/rider-cash/${riderId}/received`, { orderIds }),
       saveDelivery: (input: DeliverySettings) => request<{ delivery: DeliverySettings }>("PUT", "/api/admin/settings/delivery", input),
+      /** Delivery fee by distance (and weight) for one country. */
+      deliveryPricing: (country: Country) => request<{ pricing: DeliveryPricing }>("GET", `/api/admin/delivery-pricing/${country}`),
+      saveDeliveryPricing: (country: Country, input: DeliveryPricing) => request<{ pricing: DeliveryPricing }>("PUT", `/api/admin/delivery-pricing/${country}`, input),
 
       categories: () => request<{ items: Category[] }>("GET", "/api/admin/categories"),
       createCategory: (input: { kind: CatalogKind; name: string; iconUrl?: string | null; visible?: boolean }) =>

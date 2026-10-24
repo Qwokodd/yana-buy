@@ -113,6 +113,76 @@
       "when": 1792200000000,
       "tag": "0015_reset_broadcast_portfolio",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792210000000,
+      "tag": "0016_login_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792220000000,
+      "tag": "0017_buyer_no_verify_rider_no_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792230000000,
+      "tag": "0018_account_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792240000000,
+      "tag": "0019_locations",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792250000000,
+      "tag": "0020_urgent_messages",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792260000000,
+      "tag": "0021_delivery_distance_weight",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792270000000,
+      "tag": "0022_eat_in_pickup",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792280000000,
+      "tag": "0023_money_flow",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792290000000,
+      "tag": "0024_food_promos_video",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792300000000,
+      "tag": "0025_momo_transfers",
+      "breakpoints": true
     }
   ]
 }

@@ -3,11 +3,12 @@ import { Linking, Pressable, ScrollView, Text, View, useWindowDimensions } from 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
-import { defaultPick, findVariant, formatLD, formatLiberianPhone, pickValue, SHOP_KIND_LABEL, valueState, type Product, type ProductCard } from "@yanabuy/shared";
+import { BUY_WORDS, defaultPick, findVariant, formatLD, formatLiberianPhone, pickValue, SHOP_KIND_LABEL, valueState, type Product, type ProductCard } from "@yanabuy/shared";
 import { BackBar, discount, ProductGrid } from "@/components/Products";
 import { CategoryTile } from "@/components/Banners";
 import { Button, Card } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 import { useCart } from "@/lib/cart";
 import { Stepper } from "@/components/OrderBits";
 import { colors, font } from "@/lib/theme";
@@ -17,6 +18,7 @@ import { HeartButton } from "@/components/Heart";
 
 export default function ProductScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { foodHow } = useMode();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { width } = useWindowDimensions();
@@ -39,7 +41,7 @@ export default function ProductScreen() {
         setMore(res.more);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load this product"));
-  }, [id]);
+  }, [id, foodHow]);
 
   const back = () => (router.canGoBack() ? router.back() : router.replace("/"));
 
@@ -196,21 +198,26 @@ export default function ProductScreen() {
                   <Stepper label="quantity" value={Math.min(qty, maxQty)} max={maxQty} onChange={(v) => setQty(Math.max(1, v))} />
                 </View>
                 <Button
-                  title={added ? "Added ✓ — add more" : "Add to cart"}
+                  title={added ? "Added ✓ — add more" : BUY_WORDS[product.kind].add}
                   onPress={() => {
                     addToCart();
                     setAdded(true);
                   }}
                 />
                 <Button
-                  title="Buy now"
+                  title={BUY_WORDS[product.kind].now}
                   variant="accent"
                   onPress={() => {
                     addToCart();
                     router.navigate("/cart");
                   }}
                 />
-                <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted, textAlign: "center" }}>A YanaBuy rider delivers it. Pay cash, or mobile money where available.</Text>
+                {added && <Button title={BUY_WORDS[product.kind].go} variant="outline" onPress={() => router.navigate("/cart")} />}
+                <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted, textAlign: "center" }}>{product.kind === "food" && foodHow === "eat_in"
+                    ? "Eat in: the restaurant's own price, paid at the restaurant."
+                    : product.kind === "food" && foodHow === "pickup"
+                      ? "Pickup: collect it at the restaurant."
+                      : "A YanaBuy rider delivers it. You pay with mobile money when you order."}</Text>
               </>
             ) : (
               <Text style={{ fontFamily: font.semibold, fontSize: 14, color: colors.muted }}>

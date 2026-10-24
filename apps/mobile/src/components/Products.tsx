@@ -1,18 +1,21 @@
+import { useState } from "react";
 import { Pressable, Text, View, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { formatLD, type ProductCard } from "@yanabuy/shared";
+import { BUY_WORDS, formatLD, type ProductCard } from "@yanabuy/shared";
+import { useCart } from "@/lib/cart";
 import { colors, font } from "@/lib/theme";
 import { BackIcon } from "./Icons";
 import { RatingLine } from "./Trust";
 import { HeartButton } from "./Heart";
+import { Countdown } from "./Countdown";
 
 export function discount(price: number, compareAt: number | null) {
   if (!compareAt || compareAt <= price) return null;
   return Math.round((1 - price / compareAt) * 100);
 }
 
-function Card({ p, width }: { p: ProductCard; width: number }) {
+export function Card({ p, width }: { p: ProductCard; width: number }) {
   const router = useRouter();
   const off = discount(p.price, p.compareAtPrice);
   return (
@@ -37,6 +40,7 @@ function Card({ p, width }: { p: ProductCard; width: number }) {
         <View style={{ position: "absolute", right: 8, bottom: p.inStock ? 8 : 30 }}>
           <HeartButton productId={p.id} name={p.name} size={32} />
         </View>
+        {p.saleEndsAt && p.inStock ? <Countdown ends={p.saleEndsAt} small style={{ position: "absolute", left: 8, bottom: 8 }} /> : null}
         {!p.inStock && (
           <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, backgroundColor: "rgba(46,20,64,0.75)", paddingVertical: 4 }}>
             <Text style={{ fontFamily: font.bold, fontSize: 11.5, color: "#fff", textAlign: "center" }}>Sold out</Text>
@@ -52,10 +56,37 @@ function Card({ p, width }: { p: ProductCard; width: number }) {
           {p.hasOptions ? <Text style={{ fontFamily: font.semibold, fontSize: 11.5, color: colors.muted }}>from </Text> : null}
           {formatLD(p.price)}
         </Text>
-        <Text numberOfLines={1} style={{ fontFamily: font.regular, fontSize: 11.5, color: colors.muted }}>
-          {p.shop.name}
-        </Text>
+        <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", gap: 6 }}>
+          <Text numberOfLines={1} style={{ flex: 1, fontFamily: font.regular, fontSize: 11.5, color: colors.muted }}>
+            {p.shop.name}
+          </Text>
+          {p.inStock && <AddButton p={p} />}
+        </View>
       </View>
+    </Pressable>
+  );
+}
+
+/** Round button on a card: Add to cart (goods) or Add to order (food). Products with choices open the product page instead. */
+function AddButton({ p }: { p: ProductCard }) {
+  const cart = useCart();
+  const router = useRouter();
+  const [done, setDone] = useState(false);
+  const words = BUY_WORDS[p.kind];
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={p.hasOptions ? `Choose options for ${p.name}` : `${words.add}: ${p.name}`}
+      hitSlop={6}
+      onPress={() => {
+        if (p.hasOptions) return router.push({ pathname: "/product/[id]", params: { id: p.id } });
+        cart.add(p.id, 1, null);
+        setDone(true);
+        setTimeout(() => setDone(false), 1500);
+      }}
+      style={{ width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: p.kind === "food" ? colors.orange : colors.amber }}
+    >
+      <Text style={{ fontFamily: font.extrabold, fontSize: done ? 15 : 19, lineHeight: 21, color: colors.ink }}>{done ? "✓" : p.kind === "food" ? "+" : "+"}</Text>
     </Pressable>
   );
 }

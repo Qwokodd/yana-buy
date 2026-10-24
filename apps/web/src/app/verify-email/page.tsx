@@ -7,22 +7,19 @@ import { AuthShell } from "@/components/AuthShell";
 import { api } from "@/lib/api";
 import { nextPath } from "@/lib/next-url";
 
-/** "Confirm your email" — every account needs a confirmed email (for receipts and updates). */
+/** "Confirm your email" — sellers and riders need a confirmed email (buyers never see this page). */
 export default function VerifyEmailPage() {
   const { user, loading, setUser, logout } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
     if (!loading && !user) router.replace("/login");
-    else if (user && !user.needsEmail) router.replace(nextPath("/"));
+    else if (user && !user.needsVerification) router.replace(nextPath("/"));
   }, [loading, user, router]);
 
   if (!user) return null;
   return (
-    <AuthShell
-      title={user.email ? "Confirm your email" : "Add your email"}
-      subtitle="We send your order updates, messages and receipts by email and text. Enter the 6-digit code we email you."
-    >
+    <AuthShell title={user.email ? "Confirm your email" : "Add your email"} subtitle="Sellers and riders need a confirmed email. We send orders, payouts and account messages there.">
       <EmailConfirm
         api={api}
         user={user}

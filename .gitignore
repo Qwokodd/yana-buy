@@ -17,3 +17,5 @@ shopify-import/
 *.rar
 *.tgz
 *firebase-adminsdk*.json
+.env.local
+.env*.local

@@ -20,6 +20,17 @@ export function ShopCard({ shop, width }: { shop: PublicShop; width?: number }) 
     >
       <View style={{ height: 84, backgroundColor: food ? "#FFE3CC" : "#FFF1D6" }}>
         {shop.coverUrl ? <Image source={{ uri: shop.coverUrl }} style={{ width: "100%", height: "100%" }} contentFit="cover" /> : null}
+        <View style={{ position: "absolute", right: 10, top: 10, backgroundColor: "rgba(255,255,255,0.95)", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3 }}>
+          <Text style={{ fontFamily: font.extrabold, fontSize: 12, color: colors.ink }}>
+            {shop.rating ? (
+              <>
+                <Text style={{ color: colors.amber }}>★</Text> {shop.rating.toFixed(1)} <Text style={{ fontFamily: font.semibold, color: colors.muted }}>({shop.ratingCount})</Text>
+              </>
+            ) : (
+              "New"
+            )}
+          </Text>
+        </View>
         <View style={{ position: "absolute", left: 12, bottom: -20, backgroundColor: "#fff", borderRadius: 16, padding: 3 }}>
           <CategoryTile name={shop.name} iconUrl={shop.logoUrl} size={44} />
         </View>
@@ -30,7 +41,6 @@ export function ShopCard({ shop, width }: { shop: PublicShop; width?: number }) 
         </Text>
         <Text numberOfLines={1} style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.textSoft }}>
           {shop.category?.name ?? SHOP_KIND_LABEL[shop.kind]}
-          {shop.rating ? ` · ★ ${shop.rating.toFixed(1)}` : ""}
         </Text>
         <Text numberOfLines={2} style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>
           📍 {where(shop)}

@@ -3,10 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import type { CatalogKind, Category, Page, ProductCard, ProductSort, PublicShop } from "@yanabuy/shared";
-import { Alert, messageOf } from "@yanabuy/web-kit";
+import type { CatalogKind, Category, ProductSort, PublicShop } from "@yanabuy/shared";
+import { Alert } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
-import { GridSkeleton, ProductGrid } from "@/components/ProductCard";
+import { GridSkeleton } from "@/components/ProductCard";
+import { ProductFeed } from "@/components/ProductFeed";
+import { useProductFeed } from "@/lib/feed";
 import { ShopTile } from "@/components/ShopTile";
 import { useMode } from "@/lib/mode";
 import { api } from "@/lib/api";
@@ -46,9 +48,7 @@ export default function SearchPage() {
   const { mode, setMode } = useMode();
   const [filters, setFilters] = useState<Filters | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [results, setResults] = useState<Page<ProductCard> | null>(null);
   const [shops, setShops] = useState<PublicShop[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   // Read the address once, and again when the back button changes it.
   useEffect(() => {
@@ -82,12 +82,6 @@ export default function SearchPage() {
 
   useEffect(() => {
     if (!filters) return;
-    setResults(null);
-    setError(null);
-    api.public
-      .products({ q: filters.q || undefined, mode, category: filters.category || undefined, sort: filters.sort, china: filters.china || undefined, page: filters.page })
-      .then(setResults)
-      .catch((err) => setError(messageOf(err)));
     if (filters.q) {
       api.public
         .shops({ q: filters.q, mode })
@@ -105,13 +99,15 @@ export default function SearchPage() {
     if (f.category) qs.set("category", f.category);
     if (f.sort !== "best") qs.set("sort", f.sort);
     if (f.china) qs.set("china", "1");
-    if (f.page > 1) qs.set("page", String(f.page));
     router.replace(`/search?${qs.toString()}`, { scroll: false });
   }
 
   const category = categories.find((c) => c.slug === filters?.category);
   const title = filters?.q ? `“${filters.q}”` : category ? category.name : mode === "goods" ? "Goods & Services" : "Food";
-  const pages = results ? Math.max(1, Math.ceil(results.total / results.pageSize)) : 1;
+  // Results keep loading as you scroll — no pages.
+  const feed = useProductFeed(filters ? { q: filters.q || undefined, mode, category: filters.category || undefined, sort: filters.sort, china: filters.china || undefined } : null);
+  const items = feed.items;
+  const error = items === null ? feed.error : null;
 
   return (
     <>
@@ -121,7 +117,7 @@ export default function SearchPage() {
           <div>
             <h1 className="font-display text-[28px] font-extrabold">{title}</h1>
             <p className="text-sm text-muted">
-              {results ? `${results.total} ${results.total === 1 ? "result" : "results"}` : "Searching…"}
+              {items ? `${feed.total} ${feed.total === 1 ? "result" : "results"}` : "Searching…"}
               {filters?.q && category ? ` in ${category.name}` : ""}
             </p>
           </div>
@@ -182,11 +178,11 @@ export default function SearchPage() {
         )}
 
         {error && <Alert>{error}</Alert>}
-        {!results && !error ? (
+        {!items && !error ? (
           <GridSkeleton count={12} />
-        ) : results && results.items.length ? (
-          <ProductGrid products={results.items} />
-        ) : results ? (
+        ) : items && items.length ? (
+          <ProductFeed products={items} done={feed.done} loading={feed.loading} error={feed.error} onMore={feed.loadNext} />
+        ) : items ? (
           <div className="rounded-card border border-line bg-white px-6 py-12 text-center">
             <p className="font-display text-lg font-extrabold">Nothing found</p>
             <p className="mx-auto mt-1 max-w-md text-sm text-muted">
@@ -200,20 +196,6 @@ export default function SearchPage() {
             )}
           </div>
         ) : null}
-
-        {results && pages > 1 && (
-          <nav aria-label="Pages" className="flex items-center justify-center gap-4 text-sm">
-            <button disabled={results.page <= 1} onClick={() => update({ page: results.page - 1 })} className="font-bold text-purple disabled:opacity-40">
-              ← Previous
-            </button>
-            <span className="text-muted">
-              Page {results.page} of {pages}
-            </span>
-            <button disabled={results.page >= pages} onClick={() => update({ page: results.page + 1 })} className="font-bold text-purple disabled:opacity-40">
-              Next →
-            </button>
-          </nav>
-        )}
 
         <p className="text-center text-sm text-muted">
           Looking for something else? <Link href="/" className="font-bold text-purple hover:underline">Back to the home page</Link>

@@ -291,6 +291,7 @@ function ProductPanel({ id, onChanged }: { id: string; onChanged: (p: AdminProdu
         {p.hasOptions && <span className="text-sm font-semibold text-muted">from</span>}
         <span className="font-display text-2xl font-extrabold text-price">{formatLD(p.price)}</span>
         {p.compareAtPrice && <span className="text-sm text-muted line-through">{formatLD(p.compareAtPrice)}</span>}
+        <span className="text-[12.5px] font-semibold text-muted">seller&rsquo;s price · buyers see {formatLD(p.buyerPrice)}</span>
         <span className="ml-auto text-[12.5px] text-muted">{p.stock === null ? "Stock not counted" : `${p.stock} in stock`}</span>
       </div>
       {p.variants.length > 0 && (
@@ -320,6 +321,9 @@ function ProductPanel({ id, onChanged }: { id: string; onChanged: (p: AdminProdu
           {p.deliveryDays ? ` · about ${p.deliveryDays} days` : ""}
         </p>
       )}
+      <p className="text-[13px] font-semibold text-soft">
+        Weight: {p.weightGrams ? (p.shop.country === "US" ? `${Math.round((p.weightGrams / 453.59237) * 100) / 100} lb` : `${Math.round(p.weightGrams / 10) / 100} kg`) : "not given (the default item weight is used)"}
+      </p>
       {p.description && <p className="whitespace-pre-line text-[13.5px] text-soft">{p.description}</p>}
 
       <Link href={`/vendors?id=${p.shop.id}`} className="flex items-center gap-3 rounded-2xl bg-ground p-3 hover:ring-1 hover:ring-purple">

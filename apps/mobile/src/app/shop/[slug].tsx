@@ -8,6 +8,7 @@ import { BackBar, GridPlaceholder, ProductGrid } from "@/components/Products";
 import { CategoryTile } from "@/components/Banners";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 import { colors, font } from "@/lib/theme";
 import { MessageShopButton, RatingLine, ReviewsBlock } from "@/components/Trust";
 import { CountryNotice } from "@/components/CountryPicker";
@@ -15,6 +16,7 @@ import { AboutWork, Portfolio, ServicesMenu, Videos } from "@/components/WorkPro
 
 export default function ShopScreen() {
   const { slug } = useLocalSearchParams<{ slug: string }>();
+  const { foodHow } = useMode();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [shop, setShop] = useState<PublicShop | null>(null);
@@ -36,7 +38,7 @@ export default function ShopScreen() {
       .products({ shop: slug, bookable: true })
       .then((res) => setServices(res.items))
       .catch(() => setServices([]));
-  }, [slug]);
+  }, [slug, foodHow]);
   const work = shop?.workProfile ?? null;
 
   const back = () => (router.canGoBack() ? router.back() : router.replace("/"));
@@ -63,9 +65,15 @@ export default function ShopScreen() {
                   <Text style={{ fontFamily: font.display, fontSize: 21, color: colors.ink }}>{shop.name}</Text>
                   {work?.tagline ? <Text style={{ fontFamily: font.semibold, fontSize: 13.5, color: colors.textSoft }}>{work.tagline}</Text> : null}
                   <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>
-                    {shop.category?.name ?? SHOP_KIND_LABEL[shop.kind]} · {shop.productCount} {shop.productCount === 1 ? "item" : "items"}
+                    {shop.category?.name ?? SHOP_KIND_LABEL[shop.kind]} · {shop.productCount} {shop.kind === "restaurant" ? (shop.productCount === 1 ? "dish" : "dishes") : shop.productCount === 1 ? "item" : "items"}
                   </Text>
-                  <RatingLine rating={shop.rating} count={shop.ratingCount} size={12.5} />
+                  {shop.ratingCount > 0 ? (
+                    <RatingLine rating={shop.rating} count={shop.ratingCount} size={12.5} />
+                  ) : (
+                    <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.muted }}>
+                      <Text style={{ color: colors.amber }}>★</Text> New — no reviews yet
+                    </Text>
+                  )}
                 </View>
               </View>
             )}
@@ -92,6 +100,9 @@ export default function ShopScreen() {
                 variant="accent"
                 onPress={() => router.push({ pathname: "/book", params: { slug: shop.slug } })}
               />
+            )}
+            {shop?.booking && (
+              <Button title={shop.kind === "restaurant" ? "My reservations" : "My appointments"} variant="outline" onPress={() => router.push("/bookings")} />
             )}
             {shop && <MessageShopButton shopId={shop.id} />}
             {shop && <Button title={`Call ${formatLiberianPhone(shop.phone)}`} variant="outline" onPress={() => Linking.openURL(`tel:${shop.phone}`).catch(() => {})} />}

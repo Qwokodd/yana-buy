@@ -15,10 +15,11 @@ const hash = (code: string) => createHash("sha256").update(code).digest("hex");
 export const maskEmail = (e: string) => e.replace(/^(.{1,2})[^@]*(@.*)$/, "$1•••$2");
 
 /**
- * Sends a reset code to the account's confirmed email and (when SMS is on) its phone.
- * Says nothing about whether the number has an account — the app always shows the same message.
+ * Sends a reset code to where they typed (their phone by text, or their email). If that
+ * can't be used, it goes to their other confirmed one instead. Says nothing about whether
+ * the account exists — the app always shows the same message.
  */
-export async function startReset(user: UserRow | undefined): Promise<("email" | "sms")[]> {
+export async function startReset(user: UserRow | undefined, preferred: "email" | "sms" = "sms"): Promise<("email" | "sms")[]> {
   if (!user || user.status !== "active" || user.unclaimed) return [];
   const recent = await db
     .select({ createdAt: passwordResets.createdAt })
@@ -28,21 +29,27 @@ export async function startReset(user: UserRow | undefined): Promise<("email" | 
   if (recent[0] && Date.now() - recent[0].createdAt.getTime() < 60_000) throw new HttpError(429, "We just sent a code — wait a minute before asking for another.");
   if (recent.length >= 5) throw new HttpError(429, "Too many codes asked for. Try again in an hour.");
 
+  // The one they typed may be unconfirmed (the code proves it); a fallback must be confirmed.
+  const canEmail = (first: boolean) => !!user.email && emailReady() && (first || !!user.emailVerifiedAt);
+  const canSms = (first: boolean) => !!user.phone && smsReady() && (first || !!user.phoneVerifiedAt);
+  const channel: "email" | "sms" | null =
+    preferred === "email" ? (canEmail(true) ? "email" : canSms(false) ? "sms" : null) : canSms(true) ? "sms" : canEmail(false) ? "email" : null;
+
   const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-  await db.insert(passwordResets).values({ userId: user.id, codeHash: hash(code), expiresAt: new Date(Date.now() + MINUTES * 60_000) });
+  await db.insert(passwordResets).values({ userId: user.id, codeHash: hash(code), channel, expiresAt: new Date(Date.now() + MINUTES * 60_000) });
 
   const { appName } = await getBranding();
   const sent: ("email" | "sms")[] = [];
-  if (user.email && user.emailVerifiedAt && emailReady()) {
+  if (channel === "email") {
     const html = await emailHtml({
       heading: "Reset your password",
       big: code,
       lines: [`Hi ${user.fullName.split(" ")[0]}, enter this code in ${appName} to choose a new password.`, `It works for ${MINUTES} minutes. If you didn't ask for this, ignore this email — your password stays the same.`],
     });
-    if (await sendEmail(user.email, `${code} is your ${appName} password reset code`, html, `Your ${appName} password reset code is ${code}. It works for ${MINUTES} minutes.`)) sent.push("email");
+    if (await sendEmail(user.email!, `${code} is your ${appName} password reset code`, html, `Your ${appName} password reset code is ${code}. It works for ${MINUTES} minutes.`)) sent.push("email");
   }
-  if (smsReady() && (await sendSms(user.phone, `${appName}: your password reset code is ${code}. It works for ${MINUTES} minutes. Don't share it with anyone.`))) sent.push("sms");
-  if (!sent.length) console.log(`🔑 (no email/SMS for ${user.phone}) password reset code: ${code}`);
+  if (channel === "sms" && (await sendSms(user.phone!, `${appName}: your password reset code is ${code}. It works for ${MINUTES} minutes. Don't share it with anyone.`))) sent.push("sms");
+  if (!sent.length) console.log(`🔑 (no email/SMS for ${user.phone ?? user.email}) password reset code: ${code}`);
   return sent;
 }
 
@@ -64,9 +71,13 @@ export async function finishReset(user: UserRow | undefined, code: string, passw
   }
   await db.update(passwordResets).set({ usedAt: new Date() }).where(eq(passwordResets.id, row.id));
   await endAllSessions(user.id);
+  // The code reached them, so that phone/email is theirs.
+  const confirm: Partial<typeof users.$inferInsert> = {};
+  if (row.channel === "sms" && !user.phoneVerifiedAt) confirm.phoneVerifiedAt = new Date();
+  if (row.channel === "email" && !user.emailVerifiedAt) confirm.emailVerifiedAt = new Date();
   const [fresh] = await db
     .update(users)
-    .set({ passwordHash: await bcrypt.hash(password, 12), lastLoginAt: new Date(), updatedAt: new Date() })
+    .set({ ...confirm, passwordHash: await bcrypt.hash(password, 12), lastLoginAt: new Date(), updatedAt: new Date() })
     .where(eq(users.id, user.id))
     .returning();
   return fresh;

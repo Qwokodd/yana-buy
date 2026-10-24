@@ -67,11 +67,14 @@ Everything works without settings files in development. Before going live, copy 
 - **Work profile** (Sell → Work profile, or Profile & gallery for restaurants): tagline, about, years of experience, skills, certifications, areas served, languages, "comes to you / at our place", video links (YouTube plays on the page), and a portfolio of past work (up to 60 pieces, 10 photos + a video each, reorderable). Shown on the shop page with a "Services & prices" list of bookable services.
 - **Phone push** needs a real app build (not Expo Go): see apps/mobile/eas.json and app.config.js, and the steps in the chat / project notes (Expo account → `eas init` → Firebase google-services.json + FCM key → `eas build -p android --profile preview`).
 
-### Email & SMS
-- Sign-up asks for an email. A 6-digit code is emailed; checkout, opening a shop, bookings, rider sign-up and China requests need a confirmed email. Existing accounts are asked to add/confirm theirs (website and phone app open "Confirm your email"; admins see a box at the top of the dashboard).
-- Every notification (orders, messages, approvals, bookings, payouts, disputes, price drops) also goes by email (confirmed addresses) and SMS. Chat sends at most one email/text per conversation every 10 minutes.
-- Admins get email + SMS for: shops, products and riders to approve, payout requests, reported problems, China requests, and orders that need a rider.
-- Set it up in apps/server/.env (see .env.example): SMTP_HOST/PORT/USER/PASS + MAIL_FROM for email, TWILIO_ACCOUNT_SID/AUTH_TOKEN + TWILIO_FROM (or TWILIO_MESSAGING_SERVICE_SID) for SMS, WEB_URL and ADMIN_URL for links. Until SMTP is set, email isn't required and codes print in the server window.
+### Sign-up, login codes & verification
+- Buyers sign up with a phone number (email optional) and can browse and order straight away — no codes at sign-up, nothing to confirm.
+- Opening a shop or applying to ride needs a confirmed email (a box at the top of both forms sends the code). Riders no longer send ID photos or a licence — just vehicle, plate (motor vehicles), city, areas and an emergency contact; admin still approves. Sellers still send ID + selfie.
+- Log in with the phone number or the email + password, then a 6-digit code: texted for a phone login, emailed for an email login ("Text me instead" / "Email me instead" when the other is confirmed). Codes last 10 minutes, 5 wrong tries, one new code a minute, 10 an hour.
+- "Trust this device" skips the code for 30 days (website: unticked by default; phone app: on by default). Admins always get a code. A new password, being blocked or a role change makes every device ask again.
+- Forgot password works with a phone number or an email.
+- Signing up with a number from the old Shopify store needs a code to that number (or the store's email) before the account is handed over.
+- Login codes only start once email or SMS is set up. LOGIN_CODES=off in apps/server/.env turns them off.
 
 ### Countries (Liberia / USA)
 - A country switch in the header (website) and on Home (phone app). People only see shops, products, shop categories and banners from the country they pick. The first time, it's guessed from the device's time zone (US time zones → USA, otherwise Liberia) and then remembered.
@@ -190,6 +193,7 @@ cd apps/server && npx tsx src/scripts/smoke-riders.ts   # 27 rider sign-up check
 cd apps/server && npx tsx src/scripts/smoke-options.ts  # 26 product option checks
 cd apps/server && npx tsx src/scripts/smoke-shopify.ts  # 34 Shopify import checks
 cd apps/server && npx tsx src/scripts/smoke-extras.ts    # 39 forgot-password / admin message / work profile checks (same 2nd API as below)
+cd apps/server && npx tsx src/scripts/smoke-login.ts     # 47 sign-up / login code / trusted device checks (same 2nd API as below)
 cd apps/server && npx tsx src/scripts/smoke-notify.ts    # 34 email/SMS checks (needs a 2nd API: OUTBOX_FILE=/tmp/yb-outbox.jsonl PORT=4100 npx tsx src/index.ts)
 cd apps/server && npx tsx src/scripts/smoke-countries.ts # 32 country (Liberia/USA) checks
 cd apps/server && npx tsx src/scripts/smoke-features.ts # 65 directory / areas / discount / wishlist / notification / booking checks

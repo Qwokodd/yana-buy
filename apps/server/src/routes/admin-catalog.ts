@@ -125,10 +125,18 @@ const bannerFields = {
   title: requiredText(2, 80, "Title"),
   subtitle: optionalText(160, "Subtitle"),
   imageUrl: z.string({ required_error: "Upload a picture" }).pipe(imageUrl),
+  /** A 5–10 second video (uploaded through /api/uploads/video). */
+  videoUrl: z
+    .string()
+    .trim()
+    .max(500)
+    .regex(/^https?:\/\/\S+\.(mp4|webm|mov)$/i, "Upload the video again")
+    .nullish()
+    .transform((v) => v || null),
   linkUrl: link,
   buttonLabel: optionalText(24, "Button text"),
   advertiser: optionalText(60, "Advertiser"),
-  placement: z.enum(["hero", "strip"]).default("hero"),
+  placement: z.enum(["hero", "strip", "promo"]).default("hero"),
   platform: z.enum(["all", "web", "app"]).default("all"),
   mode: z.enum(["all", "goods", "food"]).default("all"),
   /** null = every country. */
@@ -138,9 +146,12 @@ const bannerFields = {
   active: z.boolean().default(true),
 };
 
-function checkBanner(v: { kind?: string; advertiser?: string | null; startsAt?: Date | null; endsAt?: Date | null }, ctx: z.RefinementCtx) {
+function checkBanner(v: { kind?: string; placement?: string; advertiser?: string | null; startsAt?: Date | null; endsAt?: Date | null }, ctx: z.RefinementCtx) {
   if (v.kind === "ad" && !v.advertiser) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["advertiser"], message: "Enter who the ad is for" });
+  }
+  if (v.placement === "promo" && !v.endsAt) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsAt"], message: "A promo needs an end date — that's what the countdown counts down to" });
   }
   if (v.startsAt && v.endsAt && v.endsAt <= v.startsAt) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsAt"], message: "The end date must be after the start date" });

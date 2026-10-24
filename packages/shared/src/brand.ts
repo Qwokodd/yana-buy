@@ -1,4 +1,4 @@
-import type { BrandColors, Branding, DisputeOutcome, DisputeReason, IdDocumentType, OrderStatus, PaymentMethod, RiderVehicle, ShopKind, ShopStatus, SourcingStatus } from "./types";
+import type { BrandColors, Branding, DisputeOutcome, DisputeReason, Fulfilment, IdDocumentType, OrderStatus, PaymentMethod, PayoutSchedule, RiderVehicle, ShopKind, ShopStatus, SourcingStatus } from "./types";
 import { colors } from "./theme";
 
 export const DEFAULT_COLORS: BrandColors = {
@@ -89,6 +89,23 @@ export const ID_TYPE_LABEL: Record<IdDocumentType, string> = {
 
 export const SHOP_KIND_LABEL: Record<ShopKind, string> = { store: "Shop", restaurant: "Restaurant" };
 
+/** "Flash sale ends in…" choices on the product form (hours). */
+export const FLASH_SALE_HOURS = [6, 12, 24, 48, 72, 168] as const;
+export const flashSaleLabel = (h: number) => (h < 24 ? `${h} hours` : h === 168 ? "1 week" : `${h / 24} ${h === 24 ? "day" : "days"}`);
+
+/** What to send for the sale end, from the form's choice ("keep" = leave as it is, "none" = no end, or a number of hours). */
+export function saleEndsFromChoice(choice: string, hasOldPrice: boolean): string | null | undefined {
+  if (!hasOldPrice || choice === "none") return null;
+  if (choice === "keep") return undefined;
+  return new Date(Date.now() + Number(choice) * 3600_000).toISOString();
+}
+
+/** Goods & services shop with a cart; food is ordered from restaurants. One set of words for each. */
+export const BUY_WORDS = {
+  goods: { add: "Add to cart", added: "Added to your cart", go: "Go to cart", now: "Buy now", basket: "Cart", yourBasket: "Your cart", seller: "Shop", sellers: "Shops" },
+  food: { add: "Add to order", added: "Added to your order", go: "Go to my order", now: "Order now", basket: "Order", yourBasket: "Your order", seller: "Restaurant", sellers: "Restaurants" },
+} as const;
+
 export const SHOP_STATUS_LABEL: Record<ShopStatus, string> = {
   pending: "Waiting for review",
   approved: "Approved",
@@ -135,11 +152,18 @@ export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   cancelled: "Cancelled",
 };
 
+/** The status words for eat-in and pickup orders (no rider, the buyer comes to the restaurant). */
+export function orderStatusLabel(status: OrderStatus, fulfilment: Fulfilment = "delivery"): string {
+  if (fulfilment === "eat_in") return status === "ready" ? "Ready to serve" : status === "delivered" ? "Served" : ORDER_STATUS_LABEL[status];
+  if (fulfilment === "pickup") return status === "ready" ? "Ready to collect" : status === "delivered" ? "Collected" : ORDER_STATUS_LABEL[status];
+  return ORDER_STATUS_LABEL[status];
+}
+
 export const PAYMENT_METHOD_LABEL: Record<PaymentMethod, string> = {
   cod: "Cash on delivery",
   mtn_momo: "MTN Mobile Money",
   orange_money: "Orange Money",
-  card: "Card",
+  card: "Card payment",
 };
 
 /** "YB-10001" */
@@ -147,6 +171,10 @@ export const orderNumber = (n: number | string) => `YB-${n}`;
 
 export const PAYOUT_METHOD_LABEL = { mtn_momo: "MTN Mobile Money", orange_money: "Orange Money" } as const;
 export const payoutNumber = (n: number | string) => `PO-${n}`;
+export const PAYOUT_SCHEDULE_LABEL: Record<PayoutSchedule, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", on_request: "When they ask" };
+
+/** What buyers pay for an item: the seller's price with YanaBuy's commission added on top (whole cents). */
+export const withCommission = (sellerCents: number, ratePercent: number) => Math.round((sellerCents * (100 + ratePercent)) / 100);
 export const RIDER_VEHICLE_LABEL: Record<RiderVehicle, string> = {
   motorbike: "Motorbike",
   keke: "Keke (tricycle)",
@@ -157,6 +185,11 @@ export const RIDER_VEHICLE_LABEL: Record<RiderVehicle, string> = {
 
 /** Vehicles that need a driver's licence photo. */
 export const RIDER_NEEDS_LICENSE: RiderVehicle[] = ["motorbike", "keke", "car"];
+
+/** Vehicles that can take a heavy order (over the admin's "needs a keke or car" weight). */
+export const HEAVY_VEHICLES: RiderVehicle[] = ["keke", "car"];
+/** Can a rider on this vehicle take the order? Light orders: anyone. Heavy: keke or car only. */
+export const vehicleCanCarry = (vehicle: string | null | undefined, heavy: boolean) => !heavy || (HEAVY_VEHICLES as string[]).includes(vehicle ?? "");
 
 export const disputeNumber = (n: number | string) => `DP-${n}`;
 export const sourcingNumber = (n: number | string) => `CS-${n}`;

@@ -14,12 +14,14 @@ import { ordersRouter, quoteRouter } from "./routes/orders";
 import { riderRouter } from "./routes/rider";
 import { publicRouter } from "./routes/public";
 import { adminRouter } from "./routes/admin";
+import { paymentCallbacksRouter } from "./routes/payment-callbacks";
 import { reviewsRouter, shopReviewsRouter } from "./routes/reviews";
 import { chatsRouter } from "./routes/chats";
 import { sourcingRouter } from "./routes/sourcing";
 import { bookingsRouter, shopBookingsRouter } from "./routes/bookings";
 import { riderApplicationRouter } from "./routes/rider-application";
 import { shopProfileRouter } from "./routes/shop-profile";
+import { mediaLinks } from "./lib/media-links";
 
 export function createApp() {
   const app = express();
@@ -34,6 +36,8 @@ export function createApp() {
     })
   );
   app.use(express.json({ limit: "1mb" }));
+  // Photo links point at the address the app is using (phones can't use "localhost").
+  app.use(mediaLinks);
 
   app.get("/health", (_req, res) => res.json({ status: "ok", version: "3" }));
 
@@ -69,6 +73,7 @@ export function createApp() {
   app.use("/api/shop", shopProfileRouter);
   app.use("/api/shop", shopRouter);
   app.use("/api/admin", adminRouter);
+  app.use("/api/payments", paymentCallbacksRouter);
 
   app.use((req, res) => res.status(404).json({ error: `No route for ${req.method} ${req.path}` }));
   app.use(errorHandler);

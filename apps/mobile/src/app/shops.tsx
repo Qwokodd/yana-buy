@@ -16,7 +16,7 @@ export default function ShopsDirectory() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ category?: string; mode?: string }>();
-  const { mode, setMode } = useMode();
+  const { mode, setMode, switchMode } = useMode();
   const [cats, setCats] = useState<ShopCategory[]>([]);
   const [category, setCategory] = useState(params.category ?? "");
   const [query, setQuery] = useState("");
@@ -92,7 +92,7 @@ export default function ShopsDirectory() {
                   accessibilityRole="button"
                   accessibilityState={{ selected: mode === m }}
                   onPress={() => {
-                    setMode(m);
+                    switchMode(m);
                     setCategory("");
                   }}
                   style={{ flex: 1, height: 38, borderRadius: 999, alignItems: "center", justifyContent: "center", backgroundColor: mode === m ? (m === "goods" ? colors.amber : colors.orange) : "transparent" }}

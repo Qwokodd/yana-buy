@@ -16,9 +16,10 @@ export function HeroCarousel({ banners }: { banners: Banner[] }) {
   useEffect(() => {
     if (count < 2 || paused) return;
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-    const t = setInterval(() => setIndex((i) => (i + 1) % count), 6000);
-    return () => clearInterval(t);
-  }, [count, paused]);
+    // A video ad gets its full 10 seconds; pictures move on after 6.
+    const t = setTimeout(() => setIndex((i) => (i + 1) % count), banners[index]?.videoUrl ? 10000 : 6000);
+    return () => clearTimeout(t);
+  }, [count, paused, index, banners]);
 
   const current = banners[Math.min(index, count - 1)];
   if (!current) return null;

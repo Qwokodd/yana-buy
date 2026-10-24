@@ -203,7 +203,7 @@ function DisputePanel({ id, onChanged }: { id: string; onChanged: (d: AdminDispu
   );
 }
 
-function Person({ label, name, phone, avatar }: { label: string; name: string; phone: string; avatar: string | null }) {
+function Person({ label, name, phone, avatar }: { label: string; name: string; phone: string | null; avatar: string | null }) {
   return (
     <div className="flex items-center gap-3 rounded-2xl bg-ground p-3">
       <Avatar name={name} url={avatar} size={36} />

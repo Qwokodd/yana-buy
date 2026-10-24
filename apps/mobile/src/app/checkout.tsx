@@ -2,13 +2,47 @@ import { useEffect, useState } from "react";
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { ApiError, CITIES, formatLD, formatLiberianPhone, PAYMENT_METHOD_LABEL, type PaymentMethod, type Quote } from "@yanabuy/shared";
+import { ApiError, CITIES, deliveryDetailLabel, formatLD, formatLiberianPhone, FULFILMENT_LABEL, payLabel, type Booking, type Fulfilment, type GeoPoint, type PaymentMethod, type Quote } from "@yanabuy/shared";
 import { BackBar } from "@/components/Products";
+import { DeliveryPin } from "@/components/DeliveryPin";
 import { Button, Card, Field, Notice } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useMode } from "@/lib/mode";
 import { useAuth } from "@/lib/auth";
 import { useCart } from "@/lib/cart";
 import { colors, font } from "@/lib/theme";
+
+const FULFIL_HINT: Record<Fulfilment, string> = {
+  delivery: "Menu price + delivery fee by distance",
+  eat_in: "Menu price only · eat at the restaurant",
+  pickup: "Menu price only · collect it yourself",
+};
+
+/** The next half-hour times from 30 min from now, for "when will you arrive?" (Liberia = UTC). */
+function arrivalTimes(count = 16): string[] {
+  const step = 30 * 60_000;
+  const first = Math.ceil((Date.now() + 30 * 60_000) / step) * step;
+  return Array.from({ length: count }, (_, i) => new Date(first + i * step).toISOString());
+}
+const timeLabel = (iso: string) => {
+  const d = new Date(iso);
+  const today = new Date().toISOString().slice(0, 10) === iso.slice(0, 10);
+  return `${today ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" })} ${iso.slice(11, 16)}`;
+};
+
+function Chip({ on, label, sub, onPress }: { on: boolean; label: string; sub?: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected: on }}
+      onPress={onPress}
+      style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: 14, borderWidth: 1, borderColor: on ? colors.purple : colors.lineStrong, backgroundColor: on ? colors.purple : "#fff" }}
+    >
+      <Text style={{ fontFamily: font.bold, fontSize: 13, color: on ? "#fff" : colors.ink }}>{label}</Text>
+      {sub ? <Text style={{ fontFamily: font.regular, fontSize: 12, color: on ? "rgba(255,255,255,0.85)" : colors.muted }}>{sub}</Text> : null}
+    </Pressable>
+  );
+}
 
 export default function Checkout() {
   const insets = useSafeAreaInsets();
@@ -26,14 +60,28 @@ export default function Checkout() {
   const [lastArea, setLastArea] = useState<string | null>(null);
   const [codeInput, setCodeInput] = useState("");
   const [code, setCode] = useState<string | null>(null);
+  // Delivering to themselves at their current location (default), or to someone else / another place.
+  const [forOther, setForOther] = useState(false);
+  const [pin, setPin] = useState<GeoPoint | null>(null);
+  // Delivery (menu + delivery fee), or eat in / pickup at the restaurant (menu price only).
+  // Starts on what the buyer picked when they switched to Food (goods carts fall back to delivery).
+  const { foodHow } = useMode();
+  const [fulfilment, setFulfilment] = useState<Fulfilment>(foodHow);
+  const [times] = useState(arrivalTimes);
+  const [arriveAt, setArriveAt] = useState<string | null>(null);
+  const [partySize, setPartySize] = useState("2");
+  const [bookingId, setBookingId] = useState<string | null>(null);
+  const [myBookings, setMyBookings] = useState<Booking[]>([]);
+  const delivering = fulfilment === "delivery";
 
   useEffect(() => {
     api.orders
       .lastDelivery()
       .then((res) => {
         const d = res.delivery;
+        // Their own name and phone; the last address as a starting point.
         if (d) {
-          setForm({ name: d.name, phone: formatLiberianPhone(d.phone), city: d.city, address: d.address, note: "" });
+          setForm((f) => ({ ...f, city: d.city || f.city, address: d.address, note: "" }));
           setLastArea(d.area ?? null);
         }
       })
@@ -43,11 +91,30 @@ export default function Checkout() {
   useEffect(() => {
     if (!cart.items.length) return;
     api.orders
-      .quote(cart.items, { areaId, code })
-      .then((res) => setQuote(res.quote))
+      .quote(cart.items, { areaId, code, lat: pin?.lat ?? null, lng: pin?.lng ?? null, fulfilment })
+      .then((res) => {
+        setQuote(res.quote);
+        if (!res.quote.fulfilments.includes(fulfilment)) setFulfilment("delivery");
+      })
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't check prices"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(cart.items), areaId, code]);
+  }, [JSON.stringify(cart.items), areaId, code, pin?.lat, pin?.lng, fulfilment]);
+
+  // Eat in: pay at the restaurant. Keep the chosen way of paying one that's allowed.
+  useEffect(() => {
+    if (!quote) return;
+    if (!quote.paymentMethods.find((m) => m.method === method)?.enabled) setMethod(quote.paymentMethods.find((m) => m.enabled)?.method ?? "cod");
+  }, [quote, method]);
+
+  // Eat in: the buyer's upcoming table bookings at this restaurant, to attach one.
+  const restaurantId = quote?.shops.length === 1 ? quote.shops[0].shop.id : null;
+  useEffect(() => {
+    if (fulfilment !== "eat_in" || !restaurantId) return;
+    api.bookings
+      .mine()
+      .then((r) => setMyBookings(r.items.filter((b) => b.shop.id === restaurantId && b.kind === "table" && (b.status === "requested" || b.status === "confirmed") && new Date(b.startsAt).getTime() > Date.now() - 3600_000)))
+      .catch(() => setMyBookings([]));
+  }, [fulfilment, restaurantId]);
 
   // Pick the area used last time, once the areas are known.
   useEffect(() => {
@@ -68,7 +135,13 @@ export default function Checkout() {
     try {
       const res = await api.orders.place({
         items: cart.items,
-        delivery: { ...form, note: form.note || null, areaId },
+        delivery: delivering
+          ? { ...form, note: form.note || null, areaId, lat: pin?.lat ?? null, lng: pin?.lng ?? null }
+          : { name: form.name, phone: form.phone, city: "", address: "", note: form.note || null },
+        fulfilment,
+        arriveAt: !delivering && !bookingId ? arriveAt : null,
+        partySize: fulfilment === "eat_in" && !bookingId ? Number(partySize) || null : null,
+        bookingId: fulfilment === "eat_in" ? bookingId : null,
         code,
         paymentMethod: method,
         paymentPhone: method !== "cod" && payPhone.trim() ? payPhone : undefined,
@@ -84,7 +157,7 @@ export default function Checkout() {
       for (const [k, v] of Object.entries(fe)) flat[k.replace("delivery.", "")] = v;
       setFields(flat);
       setError(Object.keys(flat).length && !fe.cart ? "Please fix the fields marked in red." : err instanceof Error ? err.message : "Couldn't place the order");
-      if (fe.cart) api.orders.quote(cart.items, { areaId, code }).then((r) => setQuote(r.quote));
+      if (fe.cart) api.orders.quote(cart.items, { areaId, code, lat: pin?.lat ?? null, lng: pin?.lng ?? null, fulfilment }).then((r) => setQuote(r.quote));
     } finally {
       setBusy(false);
     }
@@ -96,10 +169,90 @@ export default function Checkout() {
         <BackBar title="Checkout" onBack={() => router.back()} />
       </View>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 32, gap: 14 }} keyboardShouldPersistTaps="handled">
+        {quote && quote.fulfilments.length > 1 && (
+          <Card style={{ gap: 10 }}>
+            <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>How do you want it?</Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+              {quote.fulfilments.map((f) => (
+                <Chip key={f} on={fulfilment === f} label={FULFILMENT_LABEL[f]} sub={FULFIL_HINT[f]} onPress={() => setFulfilment(f)} />
+              ))}
+            </View>
+          </Card>
+        )}
+        {quote?.fulfilmentProblem ? <Notice>{quote.fulfilmentProblem}</Notice> : null}
+
+        {!delivering && (
+          <Card style={{ gap: 14 }}>
+            <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>{fulfilment === "eat_in" ? "Your visit" : "Your pickup"}</Text>
+            {quote?.shops[0] ? (
+              <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.textSoft }}>
+                At {quote.shops[0].shop.name}, {quote.shops[0].shop.city}. {fulfilment === "eat_in" ? "They'll have your food ready when you arrive." : "Come and collect it when it's ready."}
+              </Text>
+            ) : null}
+            <Field label="Name" value={form.name} onChangeText={set("name")} error={fields.name} autoComplete="name" />
+            <Field label="Phone the restaurant can call" value={form.phone} onChangeText={set("phone")} error={fields.phone} keyboardType="phone-pad" />
+            {fulfilment === "eat_in" && myBookings.length > 0 && (
+              <View style={{ gap: 6 }}>
+                <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>Table booking (optional)</Text>
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                  <Chip on={!bookingId} label="No booking" sub="Just set a time" onPress={() => setBookingId(null)} />
+                  {myBookings.map((b) => (
+                    <Chip key={b.id} on={bookingId === b.id} label={`${b.number} · ${timeLabel(b.startsAt)}`} sub={`${b.partySize} people · ${b.status}`} onPress={() => setBookingId(b.id)} />
+                  ))}
+                </View>
+                {fields.bookingId ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.danger }}>{fields.bookingId}</Text> : null}
+              </View>
+            )}
+            {!bookingId && (
+              <View style={{ gap: 6 }}>
+                <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>{fulfilment === "eat_in" ? "When will you arrive?" : "When will you collect it?"}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {fulfilment === "pickup" && <Chip on={!arriveAt} label="When it's ready" onPress={() => setArriveAt(null)} />}
+                  {times.map((t) => (
+                    <Chip key={t} on={arriveAt === t} label={timeLabel(t)} onPress={() => {
+                      setArriveAt(t);
+                      setFields(({ arriveAt: _gone, ...rest }) => rest);
+                    }} />
+                  ))}
+                </ScrollView>
+                {fields.arriveAt ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.danger }}>{fields.arriveAt}</Text> : null}
+              </View>
+            )}
+            {fulfilment === "eat_in" && !bookingId && (
+              <Field label="How many people?" value={partySize} onChangeText={setPartySize} error={fields.partySize} keyboardType="number-pad" maxLength={2} />
+            )}
+            {fulfilment === "eat_in" && quote?.shops[0] ? (
+              <Pressable onPress={() => router.push({ pathname: "/book", params: { slug: quote.shops[0].shop.slug } })}>
+                <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.purple }}>Want a table held? Book a table first →</Text>
+              </Pressable>
+            ) : null}
+            <Field label="Note for the restaurant (optional)" value={form.note} onChangeText={set("note")} maxLength={300} />
+          </Card>
+        )}
+
+        {delivering && (
         <Card style={{ gap: 14 }}>
           <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>Where should we deliver?</Text>
-          <Field label="Name" value={form.name} onChangeText={set("name")} error={fields.name} autoComplete="name" />
-          <Field label="Phone the rider can call" value={form.phone} onChangeText={set("phone")} error={fields.phone} keyboardType="phone-pad" />
+          <DeliveryPin
+            forOther={forOther}
+            onForOther={(other) => {
+              setForOther(other);
+              setForm((f) =>
+                other
+                  ? { ...f, name: "", phone: "", address: "" }
+                  : { ...f, name: user?.fullName ?? "", phone: user ? formatLiberianPhone(user.phone) : "", city: user?.city ?? f.city }
+              );
+            }}
+            pin={pin}
+            onPin={setPin}
+            onAddress={(address) => {
+              setForm((f) => ({ ...f, address }));
+              setFields(({ address: _gone, ...rest }) => rest);
+            }}
+            start={user?.location ?? null}
+          />
+          <Field label={forOther ? "Their name" : "Name"} value={form.name} onChangeText={set("name")} error={fields.name} autoComplete="name" />
+          <Field label={forOther ? "Their phone (the rider calls this)" : "Phone the rider can call"} value={form.phone} onChangeText={set("phone")} error={fields.phone} keyboardType="phone-pad" />
           {!!quote?.areas.length && (
             <View style={{ gap: 6 }}>
               <Text style={{ fontFamily: font.bold, fontSize: 13, color: colors.ink }}>Delivery area</Text>
@@ -138,10 +291,11 @@ export default function Checkout() {
           />
           <Field label="Note for the shop or rider (optional)" value={form.note} onChangeText={set("note")} maxLength={300} />
         </Card>
+        )}
 
         <Card style={{ gap: 10 }}>
           <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>How will you pay?</Text>
-          {(quote?.paymentMethods ?? [{ method: "cod" as PaymentMethod, enabled: true }]).map((m) => {
+          {(quote?.paymentMethods ?? []).map((m) => {
             const on = method === m.method;
             return (
               <Pressable
@@ -156,12 +310,15 @@ export default function Checkout() {
                   {on && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: colors.purple }} />}
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ fontFamily: font.bold, fontSize: 14.5, color: colors.ink }}>{PAYMENT_METHOD_LABEL[m.method]}</Text>
-                  <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>{m.method === "cod" ? "Pay the rider in cash when it arrives" : m.method === "mtn_momo" && m.enabled ? "Approve on your phone with your MoMo PIN" : "Coming soon"}</Text>
+                  <Text style={{ fontFamily: font.bold, fontSize: 14.5, color: colors.ink }}>{payLabel(m.method, fulfilment)}</Text>
+                  <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>{m.method === "cod" ? "Pay at the restaurant" : fulfilment === "eat_in" ? "Eat-in orders are paid at the restaurant" : m.method === "mtn_momo" && m.enabled ? "Approve on your phone with your MoMo PIN" : "Coming soon"}</Text>
                 </View>
               </Pressable>
             );
           })}
+          {quote && !quote.paymentMethods.some((m) => m.enabled) && (
+            <Text style={{ fontFamily: font.semibold, fontSize: 13, color: colors.danger }}>Online payment isn&apos;t switched on yet, so orders can&apos;t be placed right now. Please try again soon.</Text>
+          )}
           {method === "mtn_momo" && (
             <Field
               label="MTN number to pay from"
@@ -199,9 +356,12 @@ export default function Checkout() {
                       </View>
                     ))}
                   <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>Delivery</Text>
-                    <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{s.deliveryFee ? formatLD(s.deliveryFee) : "Free"}</Text>
+                    <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>
+                      {delivering ? `Delivery${s.deliveryDetail ? ` (${deliveryDetailLabel(s.deliveryDetail)})` : ""}` : FULFILMENT_LABEL[fulfilment]}
+                    </Text>
+                    <Text style={{ fontFamily: font.regular, fontSize: 13.5, color: colors.muted }}>{!delivering ? "No delivery fee" : s.deliveryProblem ? "—" : s.deliveryFee ? formatLD(s.deliveryFee) : "Free"}</Text>
                   </View>
+                  {s.deliveryProblem ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.danger }}>{s.deliveryProblem}</Text> : null}
                 </View>
               ))}
               {quote.discount > 0 && (
@@ -236,9 +396,9 @@ export default function Checkout() {
             />
           </View>
           {code && quote?.discountCode ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.success }}>{`${quote.discountCode} applied — you save ${formatLD(quote.discount)}`}</Text> : null}
-          {quote && quote.areas.length > 0 && !quote.areaId ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.warn }}>Choose your delivery area above to see the exact delivery fee.</Text> : null}
+          {delivering && quote && quote.areas.length > 0 && !quote.areaId && quote.shops.some((s) => !s.deliveryDetail) ? <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.warn }}>Choose your delivery area above to see the exact delivery fee.</Text> : null}
           {error && <Notice>{error}</Notice>}
-          {quote && !quote.ok && <Notice>Something in your cart changed — go back to the cart to check it.</Notice>}
+          {quote && !quote.ok && !quote.fulfilmentProblem && !quote.shops.some((s) => s.deliveryProblem) && <Notice>Something in your cart changed — go back to the cart to check it.</Notice>}
           <Button title={`${method === "cod" ? "Place order" : "Pay now"}${quote ? ` · ${formatLD(quote.total)}` : ""}`} onPress={place} busy={busy} disabled={!quote?.ok} style={{ marginTop: 6 }} />
         </Card>
       </ScrollView>

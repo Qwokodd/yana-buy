@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, Sc
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { Image } from "expo-image";
-import { ApiError, collectOptions, draftFrom, parseLD, type Category, type MyProduct, type OptionsDraft, type ProductInput } from "@yanabuy/shared";
+import { ApiError, collectOptions, draftFrom, FLASH_SALE_HOURS, flashSaleLabel, gramsToUnit, parseLD, saleEndsFromChoice, unitToGrams, type Category, type WeightUnit, type MyProduct, type OptionsDraft, type ProductInput } from "@yanabuy/shared";
 import { OptionsEditor } from "@/components/OptionsEditor";
 import { askPhotoSource, pickPhoto, uploadPublic } from "@/components/AvatarPicker";
 import { BackBar } from "@/components/Products";
@@ -25,7 +25,12 @@ export default function SellerProduct() {
   const [ready, setReady] = useState(!id);
   const [images, setImages] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [form, setForm] = useState({ name: "", description: "", categoryId: "", price: "", compareAtPrice: "", stock: "", deliveryDays: "" });
+  const [form, setForm] = useState({ name: "", description: "", categoryId: "", price: "", compareAtPrice: "", stock: "", deliveryDays: "", weight: "" });
+  // Flash sale: "keep" the current end, "none", or a number of hours from now.
+  const [sale, setSale] = useState("none");
+  const [saleEnds, setSaleEnds] = useState<string | null>(null);
+  /** Sellers enter weight in their country's usual unit. */
+  const [weightUnit, setWeightUnit] = useState<WeightUnit>("kg");
   const [fromChina, setFromChina] = useState(false);
   const [bookable, setBookable] = useState(false);
   const [duration, setDuration] = useState(60);
@@ -40,6 +45,7 @@ export default function SellerProduct() {
     api.shop.mine().then((res) => {
       const kind = res.shop?.kind === "restaurant" ? "food" : "goods";
       setFood(kind === "food");
+      if (res.shop?.country === "US") setWeightUnit("lb");
       api.public.categories(kind).then((c) => setCategories(c.items)).catch(() => {});
     });
     if (id) {
@@ -56,11 +62,14 @@ export default function SellerProduct() {
             compareAtPrice: toInput(p.compareAtPrice),
             stock: p.stock === null ? "" : String(p.stock),
             deliveryDays: p.deliveryDays ? String(p.deliveryDays) : "",
+            weight: p.weightGrams ? String(Math.round(gramsToUnit(p.weightGrams, p.shop.country === "US" ? "lb" : "kg") * 100) / 100) : "",
           });
           setFromChina(p.shipsFromChina);
+          setSaleEnds(p.saleEndsAt);
+          setSale(p.saleEndsAt ? "keep" : "none");
           setBookable(!!p.bookable);
           setDuration(p.durationMinutes ?? 60);
-          setOpts(draftFrom(p));
+          setOpts(draftFrom(p, p.shop.country === "US" ? "lb" : "kg"));
           setReady(true);
         })
         .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load it"));
@@ -97,7 +106,7 @@ export default function SellerProduct() {
     if (!images.length) f.images = "Add at least one photo";
     if (form.name.trim().length < 2) f.name = `Enter the ${noun}'s name`;
     if (!form.categoryId) f.categoryId = "Choose a category";
-    const collected = collectOptions(opts);
+    const collected = collectOptions(opts, weightUnit);
     if (collected.error) f.options = collected.error;
     if (!usesOptions) {
       if (!price) f.price = "Enter the price in dollars, e.g. 24.99";
@@ -107,6 +116,9 @@ export default function SellerProduct() {
     }
     const days = form.deliveryDays.trim() === "" ? null : Number(form.deliveryDays);
     if (days !== null && (!Number.isInteger(days) || days < 1 || days > 120)) f.deliveryDays = "Enter 1 to 120 days, or leave it empty";
+    const weight = form.weight.trim() === "" ? null : Number(form.weight.replace(",", "."));
+    const weightGrams = weight === null ? null : Math.round(unitToGrams(weight, weightUnit));
+    if (weight !== null && (!Number.isFinite(weight) || weightGrams! < 1 || weightGrams! > 1_000_000)) f.weight = `Enter the weight in ${weightUnit}, e.g. 1.5, or leave it empty`;
     setFields(f);
     if (Object.keys(f).length) return setError("Please fix the fields marked in red.");
 
@@ -114,11 +126,12 @@ export default function SellerProduct() {
       name: form.name,
       description: form.description || null,
       categoryId: form.categoryId,
-      ...(usesOptions ? {} : { price: price!, compareAtPrice: compare, stock }),
+      ...(usesOptions ? {} : { price: price!, compareAtPrice: compare, stock, saleEndsAt: saleEndsFromChoice(sale, !!compare) }),
       ...collected.value,
       images,
       shipsFromChina: fromChina,
       deliveryDays: days,
+      weightGrams,
       ...(food ? {} : { bookable, durationMinutes: bookable ? duration : null }),
     };
     setBusy(true);
@@ -223,11 +236,34 @@ export default function SellerProduct() {
               {fields.categoryId && <Text style={{ fontFamily: font.semibold, fontSize: 12.5, color: colors.danger }}>{fields.categoryId}</Text>}
             </View>
 
-            <OptionsEditor value={opts} onChange={setOpts} error={fields.options ?? fields.variants} />
+            <OptionsEditor value={opts} onChange={setOpts} error={fields.options ?? fields.variants} weightUnit={weightUnit} />
             {!usesOptions && (
               <>
-                <Field label="Price ($)" value={form.price} onChangeText={set("price")} error={fields.price} keyboardType="decimal-pad" placeholder="24.99" />
+                <Field label="Your price ($)" hint="What you get. YanaBuy adds its commission on top for buyers." value={form.price} onChangeText={set("price")} error={fields.price} keyboardType="decimal-pad" placeholder="24.99" />
                 <Field label="Old price (optional)" value={form.compareAtPrice} onChangeText={set("compareAtPrice")} error={fields.compareAtPrice} keyboardType="decimal-pad" hint="Shown crossed out, for a deal." />
+                {form.compareAtPrice.trim() ? (
+                  <View style={{ gap: 6 }}>
+                    <Text style={{ fontFamily: font.bold, fontSize: 13.5, color: colors.ink }}>Flash sale — ends in</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
+                      {[
+                        { v: "none", l: "No end" },
+                        ...(saleEnds ? [{ v: "keep", l: "Keep current end" }] : []),
+                        ...FLASH_SALE_HOURS.map((h) => ({ v: String(h), l: flashSaleLabel(h) })),
+                      ].map((o) => (
+                        <Pressable
+                          key={o.v}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected: sale === o.v }}
+                          onPress={() => setSale(o.v)}
+                          style={{ borderRadius: 999, borderWidth: 1.5, borderColor: sale === o.v ? colors.purple : colors.lineStrong, backgroundColor: sale === o.v ? colors.purpleTint : "#fff", paddingHorizontal: 12, paddingVertical: 7 }}
+                        >
+                          <Text style={{ fontFamily: font.semibold, fontSize: 13, color: colors.ink }}>{o.l}</Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                    <Text style={{ fontFamily: font.regular, fontSize: 12, color: colors.muted }}>Shows a countdown in Promos. The old price comes back when it ends.</Text>
+                  </View>
+                ) : null}
               </>
             )}
             {!food && (
@@ -276,6 +312,14 @@ export default function SellerProduct() {
               </View>
             )}
             {!usesOptions && <Field label="How many do you have? (optional)" value={form.stock} onChangeText={set("stock")} error={fields.stock} keyboardType="number-pad" hint="Leave empty if you don't count. At 0 it shows as sold out." />}
+            <Field
+              label={`Weight of one (${weightUnit}, optional)`}
+              value={form.weight}
+              onChangeText={set("weight")}
+              error={fields.weight ?? fields.weightGrams}
+              keyboardType="decimal-pad"
+              hint="Packed weight. Used to work out the delivery fee for heavy orders."
+            />
             <Field label="Description (optional)" value={form.description} onChangeText={set("description")} multiline maxLength={2000} style={{ height: 100, paddingTop: 12, textAlignVertical: "top" }} />
 
             {error && <Notice>{error}</Notice>}

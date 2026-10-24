@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { formatLD, parseLD, type Category, type MyProduct, type MyShop, type ProductInput } from "@yanabuy/shared";
+import { FLASH_SALE_HOURS, flashSaleLabel, formatLD, gramsToUnit, parseLD, saleEndsFromChoice, unitToGrams, type Category, type MyProduct, type MyShop, type ProductInput, type WeightUnit } from "@yanabuy/shared";
 import { Alert, Badge, Button, Field, ImageUpload, TextInput, fieldErrorsOf, inputClass, messageOf, useAuth } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
 import { collectOptions, draftFrom, OptionsEditor, type OptionsDraft } from "@/components/OptionsEditor";
@@ -151,6 +151,7 @@ export default function SellerProductsPage() {
                   <p className="truncate font-bold">{p.name}</p>
                   <p className="text-[13px] text-soft">
                     {p.hasOptions ? `from ${formatLD(p.price)} · ${p.variants.length} choices` : formatLD(p.price)}
+                    {p.buyerPrice !== p.price && <span className="text-muted"> · buyers see {p.hasOptions ? "from " : ""}{formatLD(p.buyerPrice)}</span>}
                     {p.stock !== null ? ` · ${p.stock} in stock` : ""}
                     {p.category ? ` · ${p.category.name}` : ""}
                   </p>
@@ -203,6 +204,7 @@ export default function SellerProductsPage() {
               product={editing === "new" ? null : editing}
               categories={categories}
               noun={noun}
+              weightUnit={shop.country === "US" ? "lb" : "kg"}
               onCancel={() => setEditing(null)}
               onSaved={(saved, isNew, needsReview) => {
                 setItems((prev) => (isNew ? [saved, ...(prev ?? [])] : (prev ?? []).map((x) => (x.id === saved.id ? saved : x))));
@@ -233,12 +235,15 @@ function ProductEditor({
   product,
   categories,
   noun,
+  weightUnit,
   onCancel,
   onSaved,
 }: {
   product: MyProduct | null;
   categories: Category[];
   noun: string;
+  /** Sellers enter weight in their country's usual unit. */
+  weightUnit: WeightUnit;
   onCancel: () => void;
   onSaved: (p: MyProduct, isNew: boolean, needsReview: boolean) => void;
 }) {
@@ -251,11 +256,14 @@ function ProductEditor({
     compareAtPrice: toInput(product?.compareAtPrice),
     stock: product?.stock === null || product?.stock === undefined ? "" : String(product.stock),
     deliveryDays: product?.deliveryDays ? String(product.deliveryDays) : "",
+    weight: product?.weightGrams ? String(Math.round(gramsToUnit(product.weightGrams, weightUnit) * 100) / 100) : "",
   });
   const [fromChina, setFromChina] = useState(product?.shipsFromChina ?? false);
+  // Flash sale: "keep" the current end, "none", or a number of hours from now.
+  const [sale, setSale] = useState<string>(product?.saleEndsAt ? "keep" : "none");
   const [bookable, setBookable] = useState(product?.bookable ?? false);
   const [duration, setDuration] = useState(product?.durationMinutes ?? 60);
-  const [opts, setOpts] = useState<OptionsDraft>(() => draftFrom(product));
+  const [opts, setOpts] = useState<OptionsDraft>(() => draftFrom(product, weightUnit));
   const usesOptions = opts.options.some((o) => o.name.trim() || o.values.trim());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -272,7 +280,7 @@ function ProductEditor({
     if (!images.length) f.images = "Add at least one photo";
     if (form.name.trim().length < 2) f.name = `Enter the ${noun}'s name`;
     if (!form.categoryId) f.categoryId = "Choose a category";
-    const collected = collectOptions(opts);
+    const collected = collectOptions(opts, weightUnit);
     if (collected.error) f.options = collected.error;
     if (!usesOptions) {
       if (!price) f.price = "Enter the price in dollars, e.g. 24.99";
@@ -282,6 +290,9 @@ function ProductEditor({
     }
     const days = form.deliveryDays.trim() === "" ? null : Number(form.deliveryDays);
     if (days !== null && (!Number.isInteger(days) || days < 1 || days > 120)) f.deliveryDays = "Enter 1 to 120 days, or leave it empty";
+    const weight = form.weight.trim() === "" ? null : Number(form.weight);
+    const weightGrams = weight === null ? null : Math.round(unitToGrams(weight, weightUnit));
+    if (weight !== null && (!Number.isFinite(weight) || weightGrams! < 1 || weightGrams! > 1_000_000)) f.weight = `Enter the weight in ${weightUnit}, e.g. 1.5, or leave it empty`;
     setFields(f);
     if (Object.keys(f).length) {
       setError("Please fix the fields marked in red.");
@@ -292,11 +303,12 @@ function ProductEditor({
       name: form.name,
       description: form.description || null,
       categoryId: form.categoryId,
-      ...(usesOptions ? {} : { price: price!, compareAtPrice: compare, stock }),
+      ...(usesOptions ? {} : { price: price!, compareAtPrice: compare, stock, saleEndsAt: saleEndsFromChoice(sale, !!compare) }),
       ...collected.value,
       images,
       shipsFromChina: fromChina,
       deliveryDays: days,
+      weightGrams,
       ...(noun !== "dish" ? { bookable, durationMinutes: bookable ? duration : null } : {}),
     };
     setBusy(true);
@@ -341,16 +353,31 @@ function ProductEditor({
           </select>
         )}
       </Field>
-      <OptionsEditor value={opts} onChange={setOpts} error={fields.options ?? fields.variants} />
+      <OptionsEditor value={opts} onChange={setOpts} error={fields.options ?? fields.variants} weightUnit={weightUnit} />
       {!usesOptions && (
         <>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Price ($)" error={fields.price}>
+            <Field label="Your price ($)" error={fields.price} hint="What you get. YanaBuy adds its commission on top for buyers.">
               {(id) => <TextInput id={id} inputMode="decimal" value={form.price} onChange={set("price")} invalid={!!fields.price} placeholder="24.99" />}
             </Field>
             <Field label="Old price (optional)" error={fields.compareAtPrice} hint="Shown crossed out, for a deal.">
               {(id) => <TextInput id={id} inputMode="decimal" value={form.compareAtPrice} onChange={set("compareAtPrice")} invalid={!!fields.compareAtPrice} />}
             </Field>
+            {form.compareAtPrice.trim() && (
+              <Field label="Flash sale — ends in" error={fields.saleEndsAt} hint="Shows a countdown in Promos. The old price comes back when it ends.">
+                {(id) => (
+                  <select id={id} className={inputClass} value={sale} onChange={(e) => setSale(e.target.value)}>
+                    <option value="none">No end — just a lower price</option>
+                    {product?.saleEndsAt && <option value="keep">Keep the current end ({new Date(product.saleEndsAt).toLocaleString()})</option>}
+                    {FLASH_SALE_HOURS.map((h) => (
+                      <option key={h} value={String(h)}>
+                        {flashSaleLabel(h)} from now
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+            )}
           </div>
           <Field label="How many do you have? (optional)" error={fields.stock} hint="Leave empty if you don't count. At 0 it shows as sold out.">
             {(id) => <TextInput id={id} inputMode="numeric" value={form.stock} onChange={set("stock")} invalid={!!fields.stock} />}
@@ -389,6 +416,9 @@ function ProductEditor({
           </Field>
         </div>
       )}
+      <Field label={`Weight of one (${weightUnit}, optional)`} error={fields.weight ?? fields.weightGrams} hint="Packed weight. Used to work out the delivery fee for heavy orders.">
+        {(id) => <TextInput id={id} inputMode="decimal" value={form.weight} onChange={set("weight")} invalid={!!(fields.weight ?? fields.weightGrams)} placeholder={weightUnit === "kg" ? "e.g. 1.5" : "e.g. 3"} className="max-w-[200px]" />}
+      </Field>
       <Field label="Description (optional)" error={fields.description}>
         {(id) => (
           <textarea id={id} value={form.description} onChange={set("description")} maxLength={2000} rows={4} className={`${inputClass} h-auto resize-none py-3`} placeholder="Sizes, colours, what's included…" />

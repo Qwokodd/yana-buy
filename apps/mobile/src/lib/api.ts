@@ -1,8 +1,9 @@
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
-import { createApi, type TokenStore } from "@yanabuy/shared";
+import { createApi, type DeviceStore, type TokenStore } from "@yanabuy/shared";
 import { currentCountry } from "./country";
+import { currentFoodHow } from "./mode";
 
 /**
  * Where the API is. On a phone running Expo Go, "localhost" would be the
@@ -38,4 +39,16 @@ const tokens: TokenStore = {
   },
 };
 
-export const api = createApi({ baseUrl: API_URL, tokens, country: currentCountry });
+// "Trust this device": skips the login code on this phone for 30 days. Kept when logging out.
+const DEVICE_KEY = "yanabuy.device";
+const device: DeviceStore = {
+  async get() {
+    return Platform.OS === "web" ? (globalThis.localStorage?.getItem(DEVICE_KEY) ?? null) : SecureStore.getItemAsync(DEVICE_KEY);
+  },
+  async set(token) {
+    if (Platform.OS === "web") globalThis.localStorage?.setItem(DEVICE_KEY, token);
+    else await SecureStore.setItemAsync(DEVICE_KEY, token);
+  },
+};
+
+export const api = createApi({ baseUrl: API_URL, tokens, country: currentCountry, device, foodHow: currentFoodHow });

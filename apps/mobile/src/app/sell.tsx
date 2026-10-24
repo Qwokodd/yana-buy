@@ -19,10 +19,14 @@ import {
   type ShopKind,
 } from "@yanabuy/shared";
 import { BackIcon } from "@/components/Icons";
+import { ConfirmEmailFirst } from "@/components/LoginCode";
 import { PrivatePhotoSlot, PublicPhotoSlot } from "@/components/PhotoSlot";
 import { Button, Card, Field, Notice } from "@/components/ui";
+import { ShopLocationCard } from "@/components/ShopLocation";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { setBrowsing } from "@/lib/workspace";
+import { useMode } from "@/lib/mode";
 import { useCountry } from "@/lib/country";
 import { useBranding } from "@/lib/branding";
 import { colors, font } from "@/lib/theme";
@@ -31,7 +35,7 @@ import { colors, font } from "@/lib/theme";
 export default function Sell() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, loading, reload } = useAuth();
+  const { user, loading, reload, setUser } = useAuth();
   const { appName } = useBranding();
   const [shop, setShop] = useState<MyShop | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -65,6 +69,7 @@ export default function Sell() {
     body = (
       <>
         {shop?.status === "rejected" && <Notice tone="info">{`Please fix this and send it again: ${shop.statusReason ?? ""}`}</Notice>}
+        {!user.emailVerified && (user.canVerifyBy ?? []).includes("email") && <ConfirmEmailFirst user={user} who="sellers" onDone={setUser} />}
         <ApplicationForm
           initial={shop ?? null}
           defaultPhone={formatLiberianPhone(user.phone)}
@@ -100,7 +105,7 @@ export default function Sell() {
         >
           <BackIcon />
         </Pressable>
-        <Text style={{ fontFamily: font.display, fontSize: 20, color: colors.ink }}>{shop?.status === "approved" ? "My shop" : `Sell on ${appName}`}</Text>
+        <Text style={{ fontFamily: font.display, fontSize: 20, color: colors.ink }}>{shop?.status === "approved" ? (shop.kind === "restaurant" ? "My restaurant" : "My shop") : `Sell on ${appName}`}</Text>
       </View>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: insets.bottom + 32, gap: 14 }} keyboardShouldPersistTaps="handled">
         {body}
@@ -351,7 +356,7 @@ function ApplicationForm({
               );
             })}
           </View>
-          <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted, marginTop: -6 }}>{`Your shop shows to shoppers who pick ${countryName(country)}.${country === "US" ? " Buyers in the USA pay on delivery." : ""}`}</Text>
+          <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted, marginTop: -6 }}>{`Your shop shows to shoppers who pick ${countryName(country)}.${country === "US" ? " Card payment for US buyers is coming soon." : ""}`}</Text>
           <Field label={kind === "restaurant" ? "Restaurant name" : "Shop name"} value={form.name} onChangeText={set("name")} error={fields.name} maxLength={60} />
           <Field label="What do you offer? (optional)" value={form.description} onChangeText={set("description")} error={fields.description} multiline maxLength={500} style={{ height: 90, paddingTop: 12, textAlignVertical: "top" }} />
           <Field label="Phone for customers" value={form.phone} onChangeText={set("phone")} error={fields.phone} keyboardType="phone-pad" />
@@ -429,6 +434,7 @@ function ApplicationForm({
 
 function ApprovedShop({ shop, onSaved, onOpen }: { shop: MyShop; onSaved: (s: MyShop) => void; onOpen: () => void }) {
   const router = useRouter();
+  const { setMode } = useMode();
   const [form, setForm] = useState({
     name: shop.name,
     description: shop.description ?? "",
@@ -471,7 +477,7 @@ function ApprovedShop({ shop, onSaved, onOpen }: { shop: MyShop; onSaved: (s: My
       <StatusCard
         shop={shop}
         tone={colors.success}
-        title="Your shop is open"
+        title={shop.kind === "restaurant" ? "Your restaurant is open" : "Your shop is open"}
         actions={
           <View style={{ gap: 8 }}>
             <Button title="Shop orders" variant="accent" onPress={() => router.push("/seller-orders")} />
@@ -481,12 +487,24 @@ function ApprovedShop({ shop, onSaved, onOpen }: { shop: MyShop; onSaved: (s: My
             <Button title="Reviews" variant="outline" onPress={() => router.push("/seller-reviews")} />
             <Button title="Messages" variant="outline" onPress={() => router.push("/messages")} />
             <Button title={shop.kind === "restaurant" ? "Manage your menu" : "Manage your products"} onPress={() => router.push("/seller-products")} />
-            <Button title="See your shop page" variant="outline" onPress={() => router.push({ pathname: "/shop/[slug]", params: { slug: shop.slug } })} />
+            <Button title={shop.kind === "restaurant" ? "View my restaurant page" : "View my storefront"} variant="outline" onPress={() => router.push({ pathname: "/shop/[slug]", params: { slug: shop.slug } })} />
+            <Button
+              title="Browse the app like a buyer"
+              variant="outline"
+              onPress={() => {
+                // See the home feed buyers see (Food for restaurants). Comes back to this screen next time the app opens.
+                setBrowsing(true);
+                setMode(shop.kind === "restaurant" ? "food" : "goods");
+                router.replace("/");
+              }}
+            />
           </View>
         }
       >
         {`Add ${shop.kind === "restaurant" ? "dishes" : "products"} with photos and prices, and handle your orders. YanaBuy riders pick up and deliver.`}
       </StatusCard>
+      <ShopLocationCard shop={shop} onSaved={onSaved} />
+      {shop.kind === "restaurant" && <OrderWaysCard shop={shop} onSaved={onSaved} />}
       <Card style={{ gap: 14 }}>
         <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>Shop details</Text>
         {notice && <Notice tone={notice.tone}>{notice.text}</Notice>}
@@ -551,5 +569,54 @@ function ShopKindFields({
       </View>
       <Field label="Opening hours (optional)" value={hours} onChangeText={(v) => onChange({ hours: v })} error={fields.hours} maxLength={120} placeholder="e.g. Mon–Sat 8am–8pm" />
     </>
+  );
+}
+
+/** Restaurants: besides delivery, buyers can order to eat in or to collect — menu price only, no delivery fee. */
+function OrderWaysCard({ shop, onSaved }: { shop: MyShop; onSaved: (s: MyShop) => void }) {
+  const [busy, setBusy] = useState<"eatIn" | "pickup" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function toggle(key: "eatIn" | "pickup") {
+    setBusy(key);
+    setError(null);
+    try {
+      onSaved((await api.shop.update({ [key]: !shop[key] })).shop);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't save");
+    } finally {
+      setBusy(null);
+    }
+  }
+  const rows: { key: "eatIn" | "pickup"; title: string; text: string }[] = [
+    { key: "eatIn", title: "Eat in", text: "Buyers order ahead and eat at the restaurant. Menu price only, paid at the restaurant." },
+    { key: "pickup", title: "Pickup", text: "Buyers order and collect it. Menu price only — no delivery fee." },
+  ];
+  return (
+    <Card style={{ gap: 10 }}>
+      <Text style={{ fontFamily: font.bold, fontSize: 16, color: colors.ink }}>Ways to order</Text>
+      <Text style={{ fontFamily: font.regular, fontSize: 13, color: colors.muted }}>Delivery is always on: menu price plus the delivery fee the app works out by distance.</Text>
+      {error && <Notice>{error}</Notice>}
+      {rows.map((r) => {
+        const on = shop[r.key];
+        return (
+          <Pressable
+            key={r.key}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: on, busy: busy === r.key }}
+            disabled={busy !== null}
+            onPress={() => toggle(r.key)}
+            style={{ flexDirection: "row", alignItems: "center", gap: 12, borderRadius: 16, borderWidth: 2, borderColor: on ? colors.purple : colors.line, padding: 14 }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontFamily: font.bold, fontSize: 14.5, color: colors.ink }}>{r.title}{busy === r.key ? " · saving…" : ""}</Text>
+              <Text style={{ fontFamily: font.regular, fontSize: 12.5, color: colors.muted }}>{r.text}</Text>
+            </View>
+            <View style={{ width: 44, height: 26, borderRadius: 13, backgroundColor: on ? colors.purple : colors.lineStrong, padding: 3, alignItems: on ? "flex-end" : "flex-start" }}>
+              <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: "#fff" }} />
+            </View>
+          </Pressable>
+        );
+      })}
+    </Card>
   );
 }

@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
-import type { MoneyOverview, RiderCash, ShopBalance } from "@yanabuy/shared";
+import type { MoneyOverview, RiderCash } from "@yanabuy/shared";
 import { orderNumber } from "@yanabuy/shared";
 import { db } from "../db/client";
-import { orders, payouts, shops, users, walletEntries } from "../db/schema";
+import { orders, payouts, riderEntries, shops, users, walletEntries } from "../db/schema";
 import { HttpError, parse } from "../lib/http";
 import { audit } from "../lib/audit";
 import { getFinance, saveFinance, shopBalance } from "../lib/finance";
@@ -28,10 +28,11 @@ adminMoneyRouter.get("/money", async (_req, res) => {
     .from(orders)
     .where(and(eq(orders.status, "delivered"), gte(orders.deliveredAt, month)));
   const [owed] = await db.select({ n: sql<number>`coalesce(sum(${walletEntries.amount}), 0)::int` }).from(walletEntries);
+  const [ridersOwed] = await db.select({ n: sql<number>`coalesce(sum(${riderEntries.amount}), 0)::int` }).from(riderEntries);
   const [cash] = await db
     .select({ n: sql<number>`coalesce(sum(${orders.total}), 0)::int` })
     .from(orders)
-    .where(and(eq(orders.status, "delivered"), eq(orders.paymentMethod, "cod"), isNull(orders.cashHandedInAt)));
+    .where(and(eq(orders.status, "delivered"), eq(orders.paymentMethod, "cod"), eq(orders.fulfilment, "delivery"), isNull(orders.cashHandedInAt)));
   const [waiting] = await db
     .select({ count: sql<number>`count(*)::int`, amount: sql<number>`coalesce(sum(${payouts.amount}), 0)::int` })
     .from(payouts)
@@ -47,6 +48,7 @@ adminMoneyRouter.get("/money", async (_req, res) => {
     discountsThisMonth: m.discounts,
     // Requested payouts are already taken off balances but not yet sent.
     owedToSellers: owed.n + waiting.amount,
+    owedToRiders: ridersOwed.n,
     cashWithRiders: cash.n,
     payoutsWaiting: waiting,
     paidOutThisMonth: paid.n,
@@ -60,7 +62,7 @@ adminMoneyRouter.get("/settings/finance", async (_req, res) => {
 
 const pct = z.number().min(0, "Can't be below 0%").max(50, "That's more than 50%");
 adminMoneyRouter.put("/settings/finance", async (req, res) => {
-  const input = parse(z.object({ goodsCommission: pct, foodCommission: pct, minPayout: z.number().int().min(0).max(100_000_000) }), req.body);
+  const input = parse(z.object({ goodsCommission: pct, foodCommission: pct, pickupCommission: pct, minPayout: z.number().int().min(0).max(100_000_000), maxMomoSend: z.number().int().min(0).max(100_000_000).default(50000) }), req.body);
   const finance = await saveFinance(input, req.user!.id);
   await audit(req.user!.id, "settings.finance", { type: "settings", id: "finance" }, input);
   res.json({ finance });
@@ -123,22 +125,6 @@ adminMoneyRouter.post("/payouts/:id/reject", async (req, res) => {
 });
 
 // ─── Seller balances ───────────────────────────────────────────────────────
-
-adminMoneyRouter.get("/balances", async (_req, res) => {
-  const bal = sql<number>`coalesce((select sum(w.amount) from ${walletEntries} w where w.shop_id = ${shops.id}), 0)::int`;
-  const rows = await db
-    .select({ shop: shops, owner: users.fullName, balance: bal })
-    .from(shops)
-    .innerJoin(users, eq(users.id, shops.ownerId))
-    .where(inArray(shops.status, ["approved", "suspended"]))
-    .orderBy(desc(bal), asc(shops.name));
-  const items: ShopBalance[] = rows.map((r) => ({
-    shop: { id: r.shop.id, name: r.shop.name, slug: r.shop.slug, kind: r.shop.kind, city: r.shop.city, logoUrl: r.shop.logoUrl, country: r.shop.country },
-    balance: r.balance,
-    owner: r.owner,
-  }));
-  res.json({ items });
-});
 
 adminMoneyRouter.get("/shops/:id/wallet", async (req, res) => {
   if (!z.string().uuid().safeParse(req.params.id).success) throw new HttpError(404, "Shop not found");

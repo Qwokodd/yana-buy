@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { formatLiberianPhone } from "@yanabuy/shared";
+import { formatLiberianPhone, formatPhone } from "@yanabuy/shared";
+import { useCountry } from "@/lib/country";
 import {
   Alert,
   AvatarUpload,
   Badge,
   Button,
   EmailConfirm,
+  PhoneConfirm,
   Field,
   PasswordInput,
   TextInput,
@@ -24,12 +26,14 @@ const ROLE_LABEL = { buyer: "Buyer", vendor: "Seller", rider: "Rider", admin: "A
 
 export default function AccountPage() {
   const { user, loading, setUser, logout } = useAuth();
+  const phoneExample = useCountry().country === "US" ? "(215) 555 0123" : "0770 000 000";
   const router = useRouter();
   // Set while logging out, so the "not logged in → go to login" redirect doesn't fire.
   const leaving = useRef(false);
 
   const [form, setForm] = useState({ fullName: "", city: "" });
   const [changingEmail, setChangingEmail] = useState(false);
+  const [changingPhone, setChangingPhone] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -113,7 +117,7 @@ export default function AccountPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="font-display text-[28px] font-extrabold">Your account</h1>
-            <p className="text-sm text-muted">{formatLiberianPhone(user.phone)}</p>
+            <p className="text-sm text-muted">{user.phone ? formatLiberianPhone(user.phone) : user.email}</p>
           </div>
           <Badge tone="purple">{ROLE_LABEL[user.role]}</Badge>
         </div>
@@ -215,10 +219,40 @@ export default function AccountPage() {
 
         <section className="flex flex-col gap-3 rounded-card border border-line bg-white p-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-lg font-extrabold">Phone number</h2>
+            {user.phone && (user.phoneVerified ? <Badge tone="success">Confirmed</Badge> : <Badge tone="neutral">Not confirmed</Badge>)}
+          </div>
+          <p className="text-sm text-muted">You can log in with this number. We text your login codes and order updates to it.</p>
+          {user.phone && !changingPhone ? (
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="font-semibold">{formatPhone(user.phone)}</span>
+              {user.canVerifyBy?.includes("sms") && (
+                <button type="button" onClick={() => setChangingPhone(true)} className="text-sm font-bold text-purple hover:underline">
+                  Change
+                </button>
+              )}
+            </div>
+          ) : (
+            <PhoneConfirm
+              api={api}
+              user={user}
+              changing={changingPhone}
+              placeholder={phoneExample}
+              onDone={(u) => {
+                setUser(u);
+                setChangingPhone(false);
+                setNotice({ tone: "success", text: `Phone number confirmed: ${u.phone ? formatPhone(u.phone) : ""}` });
+              }}
+            />
+          )}
+        </section>
+
+        <section className="flex flex-col gap-3 rounded-card border border-line bg-white p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-display text-lg font-extrabold">Email</h2>
             {user.email && (user.emailVerified ? <Badge tone="success">Confirmed</Badge> : <Badge tone="warn">Not confirmed</Badge>)}
           </div>
-          <p className="text-sm text-muted">We email and text you about your orders, messages and account.</p>
+          <p className="text-sm text-muted">You can log in with your email too. We email you about your orders, messages and account.</p>
           {user.email && user.emailVerified && !changingEmail ? (
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-semibold">{user.email}</span>

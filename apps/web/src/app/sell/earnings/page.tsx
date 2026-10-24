@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { formatLD, formatLiberianPhone, parseLD, PAYOUT_METHOD_LABEL, type PayoutMethod, type Wallet, type WalletEntry } from "@yanabuy/shared";
+import { formatLD, formatLiberianPhone, parseLD, PAYOUT_METHOD_LABEL, PAYOUT_SCHEDULE_LABEL, type PayoutMethod, type Wallet, type WalletEntry } from "@yanabuy/shared";
 import { Alert, Badge, Button, Field, TextInput, fieldErrorsOf, messageOf, useAuth } from "@yanabuy/web-kit";
 import { SiteHeader } from "@/components/SiteHeader";
 import { api } from "@/lib/api";
@@ -43,7 +43,8 @@ export default function EarningsPage() {
           <h1 className="font-display text-[28px] font-extrabold">Earnings</h1>
           {wallet && (
             <p className="text-sm text-muted">
-              You get the item price minus YanaBuy&rsquo;s {wallet.commission}% commission when an order is delivered. Delivery fees go to the rider service.
+              You get your full price for every item once the order is delivered. YanaBuy adds its {wallet.commission}% on top of your price for buyers, and delivery fees go to the riders. YanaBuy pays you{" "}
+              {wallet.payoutSchedule === "on_request" ? "when you ask (below)" : PAYOUT_SCHEDULE_LABEL[wallet.payoutSchedule].toLowerCase()} to your mobile money.
             </p>
           )}
         </div>

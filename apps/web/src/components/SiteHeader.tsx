@@ -2,18 +2,20 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Avatar, Logo, useAuth, useBranding } from "@yanabuy/web-kit";
 import { useMode } from "@/lib/mode";
 import { useCart } from "@/lib/cart";
 import { CountrySelect } from "@/components/CountrySelect";
+import { workspaceTitle } from "@/lib/workspace";
 import { api } from "@/lib/api";
+import { FOOD_HOW } from "@/components/FoodHowPicker";
 
 export function SiteHeader() {
   const { user } = useAuth();
   const { branding } = useBranding();
   const { count } = useCart();
-  const { mode, setMode } = useMode();
+  const { mode, switchMode, foodHow, askFoodHow } = useMode();
   const router = useRouter();
   const [q, setQ] = useState("");
   const [unread, setUnread] = useState(0);
@@ -90,7 +92,7 @@ export function SiteHeader() {
           {(["goods", "food"] as const).map((m) => (
             <button
               key={m}
-              onClick={() => setMode(m)}
+              onClick={() => switchMode(m)}
               aria-pressed={mode === m}
               className={`h-[38px] whitespace-nowrap rounded-full px-4 text-sm font-bold transition xl:px-5 ${
                 mode === m ? (m === "goods" ? "bg-amber text-ink" : "bg-orange text-ink") : "text-white"
@@ -101,15 +103,36 @@ export function SiteHeader() {
           ))}
         </div>
 
+        {mode === "food" && (
+          <button
+            type="button"
+            onClick={askFoodHow}
+            className="flex h-10 flex-shrink-0 items-center gap-1.5 rounded-full bg-orange px-3.5 text-[13px] font-bold text-ink hover:brightness-95"
+            aria-label={`Food: ${FOOD_HOW.find((o) => o.value === foodHow)?.title}. Change`}
+          >
+            <span aria-hidden>{FOOD_HOW.find((o) => o.value === foodHow)?.icon}</span>
+            <span className="hidden sm:inline">{FOOD_HOW.find((o) => o.value === foodHow)?.title}</span>
+            <span aria-hidden>▾</span>
+          </button>
+        )}
+
+        {user?.role === "vendor" && <SellerMenu />}
+
         <div className="ml-auto flex flex-shrink-0 items-center gap-3">
           <CountrySelect />
           <Link href="/shops" className="hidden text-sm font-bold text-white hover:text-amber sm:block">
             {mode === "food" ? "Restaurants" : "Shops"}
           </Link>
-          <Link href="/sell" className="hidden whitespace-nowrap text-sm font-bold text-white hover:text-amber xl:block">
-            {user?.role === "vendor" ? "My shop" : `Sell on ${branding.appName}`}
-          </Link>
-          {user && (
+          {user?.role === "rider" ? (
+            <Link href="/rider" className="hidden whitespace-nowrap text-sm font-bold text-white hover:text-amber sm:block">
+              My deliveries
+            </Link>
+          ) : user?.role === "vendor" ? null : (
+            <Link href="/sell" className="hidden whitespace-nowrap text-sm font-bold text-white hover:text-amber xl:block">
+              Sell on {branding.appName}
+            </Link>
+          )}
+          {user && user.role !== "vendor" && (
             <Link href="/orders" className="hidden text-sm font-bold text-white hover:text-amber md:block">
               My orders
             </Link>
@@ -178,5 +201,59 @@ export function SiteHeader() {
         </div>
       </div>
     </header>
+  );
+}
+
+/** Sellers: everything for running the shop / restaurant in one menu by the search bar. */
+function SellerMenu() {
+  const { user } = useAuth();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !box.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [open]);
+  const food = user?.myShop?.kind === "restaurant";
+  const links: { href: string; label: string }[] = [
+    { href: "/sell", label: workspaceTitle(user) },
+    { href: "/sell/orders", label: food ? "Restaurant orders" : "Shop orders" },
+    { href: "/sell/products", label: food ? "My menu" : "My products" },
+    { href: "/sell/bookings", label: food ? "Table bookings" : "Appointments" },
+    { href: "/sell/earnings", label: "Earnings" },
+    { href: "/sell/reviews", label: "Reviews" },
+    { href: "/sell/profile", label: food ? "Restaurant profile" : "Shop profile" },
+    ...(user?.myShop ? [{ href: `/shop/${user.myShop.slug}`, label: food ? "View my restaurant page" : "View my storefront" }] : []),
+    { href: "/orders", label: "My purchases" },
+  ];
+  return (
+    <div ref={box} className="relative flex-shrink-0">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-10 items-center gap-1.5 rounded-full bg-white/10 px-4 text-sm font-bold text-white hover:bg-white/20"
+      >
+        <span className="whitespace-nowrap">{workspaceTitle(user)}</span>
+        <span aria-hidden>▾</span>
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-12 z-40 flex w-60 flex-col rounded-2xl border border-line bg-white p-1.5 shadow-xl">
+          {links.map((l) => (
+            <Link key={l.href} role="menuitem" href={l.href} onClick={() => setOpen(false)} className="rounded-xl px-3 py-2.5 text-sm font-semibold text-ink hover:bg-purple-tint">
+              {l.label}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

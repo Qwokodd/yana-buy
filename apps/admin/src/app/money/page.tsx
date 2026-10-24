@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { formatLD, parseLD, type FinanceSettings, type MoneyOverview, type RiderCash, type ShopBalance, type WalletEntry } from "@yanabuy/shared";
+import { formatLD, parseLD, type FinanceSettings, type MoneyOverview, type RiderCash } from "@yanabuy/shared";
 import { Alert, Avatar, Button, Field, TextInput, messageOf } from "@yanabuy/web-kit";
 import { AdminShell } from "@/components/AdminShell";
-import { EmptyPanel, Tile } from "@/components/bits";
 import { api } from "@/lib/api";
-import { whenTime } from "@/lib/labels";
 
 export default function MoneyPage() {
   const [overview, setOverview] = useState<MoneyOverview | null>(null);
@@ -32,11 +30,15 @@ export default function MoneyPage() {
     <AdminShell title="Money" subtitle="What came in this month, what YanaBuy earned, and what's owed.">
       {error && <Alert>{error}</Alert>}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {card("Sales this month", overview?.salesThisMonth, "Items delivered, before commission")}
-        {card("YanaBuy commission", overview?.commissionThisMonth, `+ ${overview ? formatLD(overview.deliveryFeesThisMonth) : "–"} delivery fees · − ${overview ? formatLD(overview.discountsThisMonth) : "–"} discount codes`)}
+        {card("Sales this month", overview?.salesThisMonth, "Items delivered, what buyers paid (commission included)")}
+        {card("YanaBuy commission", overview?.commissionThisMonth, `Added on top of sellers' prices · − ${overview ? formatLD(overview.discountsThisMonth) : "–"} discount codes`)}
         {card("Owed to sellers", overview?.owedToSellers, overview ? `${formatLD(overview.paidOutThisMonth)} paid out this month` : "")}
-        {card("Cash with riders", overview?.cashWithRiders, "Collected, not handed in yet")}
+        {card("Owed to riders", overview?.owedToRiders, overview ? `${formatLD(overview.deliveryFeesThisMonth)} delivery fees this month — all go to riders` : "")}
       </div>
+      <Link href="/owed" className="mt-4 flex items-center justify-between rounded-card border border-line bg-white px-5 py-4 font-bold hover:bg-[#FBF9FC]">
+        <span>Sales by shop, what each shop, restaurant and rider is owed, and paying them</span>
+        <span className="text-purple">Who we owe →</span>
+      </Link>
       {overview && overview.payoutsWaiting.count > 0 && (
         <Link href="/payouts" className="mt-4 flex items-center justify-between rounded-card border border-amber bg-amber-tint px-5 py-4 font-bold hover:brightness-95">
           <span>
@@ -49,9 +51,6 @@ export default function MoneyPage() {
       <div className="mt-6 grid items-start gap-5 xl:grid-cols-2">
         <RiderCashSection onChanged={load} />
         <FinanceSection />
-      </div>
-      <div className="mt-5">
-        <Balances onChanged={load} />
       </div>
     </AdminShell>
   );
@@ -118,7 +117,7 @@ function RiderCashSection({ onChanged }: { onChanged: () => void }) {
 }
 
 function FinanceSection() {
-  const [form, setForm] = useState<{ goods: string; food: string; min: string } | null>(null);
+  const [form, setForm] = useState<{ goods: string; food: string; pickup: string; min: string; cap: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -126,21 +125,21 @@ function FinanceSection() {
   useEffect(() => {
     api.admin
       .finance()
-      .then((r) => setForm({ goods: String(r.finance.goodsCommission), food: String(r.finance.foodCommission), min: String(r.finance.minPayout / 100) }))
+      .then((r) => setForm({ goods: String(r.finance.goodsCommission), food: String(r.finance.foodCommission), pickup: String(r.finance.pickupCommission), min: String(r.finance.minPayout / 100), cap: String((r.finance.maxMomoSend ?? 50000) / 100) }))
       .catch((err) => setError(messageOf(err)));
   }, []);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!form) return;
-    const input: FinanceSettings = { goodsCommission: Number(form.goods), foodCommission: Number(form.food), minPayout: parseLD(form.min) ?? 0 };
-    if ([input.goodsCommission, input.foodCommission].some((n) => !Number.isFinite(n))) return setError("Commission must be a number, e.g. 10");
+    const input: FinanceSettings = { goodsCommission: Number(form.goods), foodCommission: Number(form.food), pickupCommission: Number(form.pickup), minPayout: parseLD(form.min) ?? 0, maxMomoSend: form.cap.trim() === "0" ? 0 : (parseLD(form.cap) ?? 0) };
+    if ([input.goodsCommission, input.foodCommission, input.pickupCommission].some((n) => !Number.isFinite(n))) return setError("Commission must be a number, e.g. 10");
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       await api.admin.saveFinance(input);
-      setNotice("Saved. New commission applies to orders delivered from now on.");
+      setNotice("Saved. Buyer prices update straight away; orders already placed keep the commission they were placed with.");
     } catch (err) {
       setError(messageOf(err));
     } finally {
@@ -152,15 +151,23 @@ function FinanceSection() {
     <form onSubmit={save} className="flex flex-col gap-4 rounded-[20px] border border-line bg-white p-5" noValidate aria-label="Commission">
       <div>
         <h2 className="font-display text-lg font-extrabold">Commission & payouts</h2>
-        <p className="text-[12.5px] text-muted">YanaBuy keeps this share of the item price when an order is delivered. Delivery fees are YanaBuy's too.</p>
+        <p className="text-[12.5px] text-muted">
+          Added on top of each seller&rsquo;s price, so buyers see one price and sellers get their full price. Delivery fees go to the riders.
+        </p>
       </div>
       {!form ? (
         <p className="text-sm text-muted">Loading…</p>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Shops (%)">{(id) => <TextInput id={id} inputMode="decimal" value={form.goods} onChange={(e) => setForm({ ...form, goods: e.target.value })} />}</Field>
-          <Field label="Restaurants (%)">{(id) => <TextInput id={id} inputMode="decimal" value={form.food} onChange={(e) => setForm({ ...form, food: e.target.value })} />}</Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Shops, added to price (%)">{(id) => <TextInput id={id} inputMode="decimal" value={form.goods} onChange={(e) => setForm({ ...form, goods: e.target.value })} />}</Field>
+          <Field label="Restaurants — delivery (%)">{(id) => <TextInput id={id} inputMode="decimal" value={form.food} onChange={(e) => setForm({ ...form, food: e.target.value })} />}</Field>
+          <Field label="Restaurants — pickup (%)" hint="Eat-in has no commission: buyers see the restaurant's own price.">
+            {(id) => <TextInput id={id} inputMode="decimal" value={form.pickup} onChange={(e) => setForm({ ...form, pickup: e.target.value })} />}
+          </Field>
           <Field label="Smallest payout ($)">{(id) => <TextInput id={id} inputMode="decimal" value={form.min} onChange={(e) => setForm({ ...form, min: e.target.value })} />}</Field>
+          <Field label="Most one “Send by MoMo” can be ($)" hint="Bigger payouts must be sent by hand and recorded. 0 switches the button off.">
+            {(id) => <TextInput id={id} inputMode="decimal" value={form.cap} onChange={(e) => setForm({ ...form, cap: e.target.value })} />}
+          </Field>
         </div>
       )}
       {notice && <Alert tone="success">{notice}</Alert>}
@@ -171,141 +178,5 @@ function FinanceSection() {
         </Button>
       </div>
     </form>
-  );
-}
-
-function Balances({ onChanged }: { onChanged: () => void }) {
-  const [items, setItems] = useState<ShopBalance[] | null>(null);
-  const [selected, setSelected] = useState<ShopBalance | null>(null);
-  const load = useCallback(() => {
-    api.admin
-      .balances()
-      .then((r) => setItems(r.items))
-      .catch(() => setItems([]));
-  }, []);
-  useEffect(load, [load]);
-
-  return (
-    <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_440px]">
-      <section className="overflow-hidden rounded-[20px] border border-line bg-white" aria-label="Seller balances">
-        <div className="px-5 pt-5">
-          <h2 className="font-display text-lg font-extrabold">Seller balances</h2>
-          <p className="text-[12.5px] text-muted">What each shop has earned and not taken out yet.</p>
-        </div>
-        <table className="mt-3 w-full text-left text-[13.5px]">
-          <tbody>
-            {items?.map((b) => (
-              <tr key={b.shop.id} onClick={() => setSelected(b)} className={`cursor-pointer border-t border-line hover:bg-[#FBF9FC] ${selected?.shop.id === b.shop.id ? "bg-purple-tint/60" : ""}`}>
-                <td className="px-5 py-3">
-                  <button className="flex items-center gap-2.5 text-left" onClick={() => setSelected(b)}>
-                    <Tile name={b.shop.name} url={b.shop.logoUrl} size={34} />
-                    <span>
-                      <span className="block font-bold">{b.shop.name}</span>
-                      <span className="text-xs text-muted">{b.owner}</span>
-                    </span>
-                  </button>
-                </td>
-                <td className="px-5 py-3 text-right font-bold">{formatLD(b.balance)}</td>
-              </tr>
-            ))}
-            {items?.length === 0 && (
-              <tr>
-                <td className="px-5 py-8 text-center text-muted">No open shops yet.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
-      {selected ? (
-        <ShopWallet
-          key={selected.shop.id}
-          balance={selected}
-          onChanged={() => {
-            load();
-            onChanged();
-          }}
-        />
-      ) : (
-        <EmptyPanel>Pick a shop to see every sale and payout, or to correct its balance.</EmptyPanel>
-      )}
-    </div>
-  );
-}
-
-const ENTRY_LABEL: Record<WalletEntry["type"], string> = { sale: "Sale", payout: "Payout", payout_returned: "Payout refused — returned", adjustment: "Correction", refund: "Refund to buyer" };
-
-function ShopWallet({ balance, onChanged }: { balance: ShopBalance; onChanged: () => void }) {
-  const [data, setData] = useState<{ balance: number; entries: WalletEntry[] } | null>(null);
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.admin
-      .shopWallet(balance.shop.id)
-      .then(setData)
-      .catch((err) => setError(messageOf(err)));
-  }, [balance.shop.id]);
-
-  async function adjust(e: React.FormEvent) {
-    e.preventDefault();
-    const neg = amount.trim().startsWith("-");
-    const cents = parseLD(amount.replace("-", ""));
-    if (!cents) return setError("Enter an amount, e.g. 500 or -500");
-    setBusy(true);
-    setError(null);
-    try {
-      setData(await api.admin.adjustWallet(balance.shop.id, neg ? -cents : cents, note));
-      setAmount("");
-      setNote("");
-      onChanged();
-    } catch (err) {
-      setError(messageOf(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="flex flex-col gap-3 rounded-[20px] border border-line bg-white p-5" aria-label={`${balance.shop.name} wallet`}>
-      <div className="flex items-center justify-between">
-        <p className="font-display text-lg font-extrabold">{balance.shop.name}</p>
-        <p className="font-display text-xl font-extrabold">{data ? formatLD(data.balance) : "…"}</p>
-      </div>
-      <ul className="flex max-h-[320px] flex-col overflow-y-auto">
-        {data?.entries.map((e) => (
-          <li key={e.id} className="flex items-center justify-between gap-3 border-t border-line py-2 text-[13px] first:border-t-0">
-            <span>
-              <span className="block font-semibold">
-                {ENTRY_LABEL[e.type]} {e.orderNumber ?? e.payoutNumber ?? ""}
-              </span>
-              <span className="text-xs text-muted">
-                {whenTime(e.createdAt)}
-                {e.note ? ` · ${e.note}` : ""}
-              </span>
-            </span>
-            <span className={`font-bold ${e.amount < 0 ? "text-danger" : "text-success"}`}>
-              {e.amount < 0 ? "−" : "+"}
-              {formatLD(Math.abs(e.amount))}
-            </span>
-          </li>
-        ))}
-        {data?.entries.length === 0 && <li className="py-4 text-center text-sm text-muted">Nothing yet.</li>}
-      </ul>
-      <form onSubmit={adjust} className="flex flex-col gap-2 border-t border-line pt-3" noValidate>
-        <p className="text-[13px] font-bold">Correct the balance</p>
-        <div className="grid grid-cols-[120px_1fr] gap-2">
-          <TextInput aria-label="Amount" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="500 or -500" />
-          <TextInput aria-label="Reason" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Reason (the seller sees this)" />
-        </div>
-        {error && <Alert>{error}</Alert>}
-        <div>
-          <Button type="submit" size="sm" variant="outline" busy={busy} disabled={!amount.trim() || note.trim().length < 3}>
-            Save correction
-          </Button>
-        </div>
-      </form>
-    </section>
   );
 }

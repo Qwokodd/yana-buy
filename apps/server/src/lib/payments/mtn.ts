@@ -44,7 +44,7 @@ const amountText = (cents: number) => (cents % 100 === 0 ? String(cents / 100) :
 export async function requestToPay(p: { reference: string; cents: number; phone: string; externalId: string; message: string }) {
   const res = await fetch(`${base()}/collection/v1_0/requesttopay`, {
     method: "POST",
-    headers: await headers({ "X-Reference-Id": p.reference, "Content-Type": "application/json" }),
+    headers: await headers({ "X-Reference-Id": p.reference, "Content-Type": "application/json", ...(env.MTN_MOMO_CALLBACK_URL ? { "X-Callback-Url": env.MTN_MOMO_CALLBACK_URL } : {}) }),
     body: JSON.stringify({
       amount: amountText(p.cents),
       currency: env.MTN_MOMO_CURRENCY,

@@ -6,7 +6,7 @@ import path from "node:path";
 import { env } from "../env";
 import { HttpError } from "../lib/http";
 import { PRIVATE_ROOT, publicBase, signedUrl, verifySignature } from "../lib/private-files";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, requireRole } from "../middleware/auth";
 
 export const UPLOAD_ROOT = path.resolve(process.cwd(), env.UPLOAD_DIR);
 fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
@@ -67,6 +67,39 @@ uploadRouter.post("/", requireAuth, receive(imageUploader(UPLOAD_ROOT, 5), 5), (
   const base = publicBase(req);
   res.status(201).json({ urls: received(req).map((f) => `${base}/uploads/${f.filename}`) });
 });
+
+// Short video ads / promos (admins only). The admin page checks they're 5–10 seconds long before uploading.
+const VIDEO_EXT: Record<string, string> = { "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov" };
+const videoUploader = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_ROOT,
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${VIDEO_EXT[file.mimetype]}`),
+  }),
+  limits: { fileSize: 30 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!VIDEO_EXT[file.mimetype]) return cb(new HttpError(400, "Only MP4, WebM or MOV videos can be uploaded"));
+    cb(null, true);
+  },
+});
+
+/** A 5–10 second video for a banner or ad. Returns its public URL. */
+uploadRouter.post(
+  "/video",
+  requireAuth,
+  requireRole("admin"),
+  (req: Request, res: Response, next: NextFunction) =>
+    videoUploader.single("video")(req, res, (err: unknown) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        return next(new HttpError(400, err.code === "LIMIT_FILE_SIZE" ? "The video must be under 30 MB — keep it to 5–10 seconds" : err.message));
+      }
+      next(err);
+    }),
+  (req, res) => {
+    if (!req.file) throw new HttpError(400, "Choose a video to upload");
+    res.status(201).json({ url: `${publicBase(req)}/uploads/${req.file.filename}` });
+  }
+);
 
 /** Private photos: ID documents and selfies. Returns keys plus a preview link. */
 uploadRouter.post("/private", requireAuth, receive(imageUploader(PRIVATE_ROOT, 3), 3), (req, res) => {

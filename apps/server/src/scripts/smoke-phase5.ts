@@ -168,7 +168,7 @@ r = await call("POST", `/api/admin/shops/${shopId}/adjust`, { amount: -1000, not
 check(r.status === 400, "adjustments need a reason");
 r = await call("POST", `/api/admin/shops/${shopId}/adjust`, { amount: -1000, note: "Refund for a broken radio" }, admin);
 check(r.data.balance === balanceAfter - 1000, "admin corrects a balance with a note");
-r = await call("GET", "/api/admin/balances", undefined, admin);
+r = await call("GET", "/api/admin/owed/shops?period=all", undefined, admin);
 check(r.data.items.find((x: any) => x.shop.id === shopId)?.balance === balanceAfter - 1000, "seller balances list");
 r = await call("GET", "/api/shop/wallet", undefined, buyer.token);
 check(r.status === 404, "buyers have no wallet");

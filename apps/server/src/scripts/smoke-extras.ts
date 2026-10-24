@@ -33,6 +33,16 @@ async function call(method: string, p: string, body?: unknown, token?: string) {
   return { status: res.status, data: data as any };
 }
 
+/** Logs in; when a login code is asked for, reads it from the outbox file and finishes. */
+async function login(body: Record<string, unknown>) {
+  const read = () => (fs.existsSync(OUTBOX) ? fs.readFileSync(OUTBOX, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l) as { text: string }) : []);
+  const before = read().length;
+  const r = await call("POST", "/api/auth/login", body);
+  if (r.status !== 200 || !r.data.needsCode) return r;
+  const msg = read().slice(before).reverse().find((m) => /login code is (\d{6})/.test(m.text));
+  return call("POST", "/api/auth/login/verify", { challengeId: r.data.challengeId, code: /login code is (\d{6})/.exec(msg?.text ?? "")?.[1] ?? "000000" });
+}
+
 const PNG = Uint8Array.from(
   atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="),
   (c) => c.charCodeAt(0)
@@ -44,7 +54,7 @@ function photos(count: number) {
 }
 
 const n = String(Date.now()).slice(-7);
-let r = await call("POST", "/api/auth/login", { phone: "0770000001", password: "adminpass123" });
+let r = await login({ phone: "0770000001", password: "adminpass123" });
 const admin = r.data.accessToken as string;
 
 async function person(prefix: string, name: string) {
@@ -109,28 +119,28 @@ check(r.status === 200 && r.data.ok, "asking for a code for an unknown number lo
 const uEmail = mailOf("forgetful");
 r = await call("POST", "/api/auth/register", { fullName: "Forgetful Fatu", phone: `081${n}`, email: uEmail, password: "oldpass123" });
 const fatu = { token: r.data.accessToken as string, refresh: r.data.refreshToken as string, id: r.data.user.id as string };
-await call("POST", "/api/me/email/verify", { code: lastCode(uEmail) }, fatu.token);
+await confirm(fatu.token, uEmail);
 markNow();
 r = await call("POST", "/api/auth/forgot-password", { phone: `+231 81 ${n}` });
 check(r.status === 200, "forgot password accepts the number typed any way");
 let s = since();
-check(s.some((m) => m.channel === "email" && m.to === uEmail && /password reset/.test(m.subject ?? "")), "the code is emailed to the confirmed address", s);
-check(s.some((m) => m.channel === "sms" && m.to === `+23181${n}` && /reset code/.test(m.text)), "…and texted to the phone");
+check(s.some((m) => m.channel === "sms" && m.to === `+23181${n}` && /reset code/.test(m.text)), "typed the number: the code is texted to the phone", s);
+check(!s.some((m) => m.channel === "email" && m.to === uEmail), "…and not emailed as well");
 r = await call("POST", "/api/auth/forgot-password", { phone: `081${n}` });
 check(r.status === 429, "another code can't be asked for within a minute");
 r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(`+23181${n}`) === "000000" ? "111111" : "000000", password: "newpass123" });
 check(r.status === 400 && r.data.fields?.code, "a wrong code is refused");
-r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(uEmail), password: "short" });
+r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(`+23181${n}`), password: "short" });
 check(r.status === 400 && r.data.fields?.password, "the new password must be at least 8 characters");
-r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(uEmail), password: "newpass123" });
+r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(`+23181${n}`), password: "newpass123" });
 check(r.status === 200 && r.data.accessToken && r.data.user.id === fatu.id, "the right code sets the new password and logs in");
 r = await call("POST", "/api/auth/refresh", { refreshToken: fatu.refresh });
 check(r.status === 401, "other devices are logged out");
-r = await call("POST", "/api/auth/login", { phone: `081${n}`, password: "oldpass123" });
+r = await login({ phone: `081${n}`, password: "oldpass123" });
 check(r.status === 401, "the old password no longer works");
-r = await call("POST", "/api/auth/login", { phone: `081${n}`, password: "newpass123" });
-check(r.status === 200, "the new one does");
-r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(uEmail), password: "another123" });
+r = await login({ phone: `081${n}`, password: "newpass123" });
+check(r.status === 200 && r.data.accessToken, "the new one does");
+r = await call("POST", "/api/auth/reset-password", { phone: `081${n}`, code: resetCode(`+23181${n}`), password: "another123" });
 check(r.status === 400, "a code works only once");
 
 // ─── Work profile & portfolio ─────────────────────────────────────────────
@@ -200,7 +210,7 @@ await wait(1200);
 s = since();
 check(s.some((m) => m.channel === "email" && m.to === uEmail && m.subject === `Your account ${n}`), "…by email", s);
 check(s.some((m) => m.channel === "sms" && m.to === `+23181${n}` && m.text.includes("Thanks for shopping")), "…by SMS");
-const fatuLogin = (await call("POST", "/api/auth/login", { phone: `081${n}`, password: "newpass123" })).data.accessToken;
+const fatuLogin = (await login({ phone: `081${n}`, password: "newpass123" })).data.accessToken;
 r = await call("GET", "/api/me/notifications", undefined, fatuLogin);
 check(r.data.items.some((x: any) => x.title === `Your account ${n}` && x.link === "/shops"), "…and in the app's bell");
 
@@ -221,5 +231,22 @@ check(since().every((m) => m.channel !== "sms" || !m.text.includes(`US vendors $
 r = await call("GET", "/api/admin/broadcasts", undefined, admin);
 const sent = r.data.items.find((b: any) => b.title === `US vendors ${n}`);
 check(sent && sent.status === "sent" && sent.emailsSent >= 1 && sent.sentBy, "the message history shows what was sent and how many emails went", sent);
+
+// ─── Urgent messages, several people, riders online, near a shop ─────────
+r = await call("POST", "/api/admin/broadcasts/preview", { audience: "people", userIds: [fatu.id, usPro.id], urgent: true, title: `Road closed ${n}`, body: "Use the other route." }, admin);
+check(r.status === 200 && r.data.preview.recipients === 2 && r.data.preview.smsSample?.includes("URGENT: Road closed") && r.data.preview.smsSample.length <= 160, "preview shows the exact urgent text", r.data);
+check(typeof r.data.preview.smsCostUsd === "number" && r.data.preview.withPhone >= 1, "preview shows phones and a cost estimate", r.data);
+r = await call("POST", "/api/admin/broadcasts/preview", { audience: "people", userIds: [] }, admin);
+check(r.status === 400, "picking people needs at least one");
+r = await call("POST", "/api/admin/broadcasts/preview", { audience: "online_riders" }, admin);
+check(r.status === 200, "riders online now can be messaged", r.data);
+markNow();
+r = await call("POST", "/api/admin/broadcasts", { audience: "people", userIds: [fatu.id], urgent: true, title: `Road closed ${n}`, body: "Use the other route.", channels: { app: true, email: false, sms: true } }, admin);
+check(r.status === 201 && r.data.broadcast.urgent === true && r.data.broadcast.audience === "people", "urgent message to picked people", r.data);
+await wait(1200);
+check(since().some((m) => m.channel === "sms" && m.to === `+23181${n}` && m.text.includes("URGENT: Road closed")), "…the text says URGENT", since());
+r = await call("GET", "/api/admin/broadcasts", undefined, admin);
+const urgentSent = r.data.items.find((b: any) => b.title === `Road closed ${n}`);
+check(urgentSent?.status === "sent" && urgentSent.smsSent === 1 && urgentSent.smsFailed === 0, "history counts sent and failed texts", urgentSent);
 
 console.log(`\n${passed} checks passed`);

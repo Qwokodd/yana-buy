@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "@/lib/api";
-import { Avatar, EmailConfirm, Logo, useAuth } from "@yanabuy/web-kit";
+import { Avatar, EmailConfirm, Logo, PhoneConfirm, useAuth } from "@yanabuy/web-kit";
 
 interface NavItem {
   href: string;
@@ -40,13 +40,16 @@ const NAV: { section?: string; items: NavItem[] }[] = [
   {
     section: "Deliveries",
     items: [
+      { href: "/map", label: "Live map" },
       { href: "/deliveries", label: "Assign riders", badge: "rider" },
       { href: "/delivery-settings", label: "Delivery fees" },
+      { href: "/delivery-pricing", label: "Fees by distance & weight" },
     ],
   },
   {
     section: "Money",
     items: [
+      { href: "/owed", label: "Who we owe" },
       { href: "/payouts", label: "Payouts", badge: "payout" },
       { href: "/money", label: "Money overview" },
       { href: "/discounts", label: "Discount codes" },
@@ -186,6 +189,13 @@ export function AdminShell({ title, subtitle, actions, children }: { title: stri
               <h2 className="font-display text-base font-extrabold">{user.email ? "Confirm your email" : "Add your email"} to get admin alerts</h2>
               <p className="mb-3 text-[13px] text-soft">New shops and products to approve, payout requests, problems with orders and orders that need a rider come to you by email and SMS.</p>
               <EmailConfirm api={api} user={user} onDone={setUser} />
+            </section>
+          )}
+          {user && user.canVerifyBy?.includes("sms") && !user.phoneVerified && (
+            <section className="mb-6 max-w-xl rounded-[20px] border border-amber bg-[#FFF8E8] p-5">
+              <h2 className="font-display text-base font-extrabold">{user.phone ? "Confirm your phone number" : "Add your phone number"}</h2>
+              <p className="mb-3 text-[13px] text-soft">Your login codes and admin alerts can come by text message.</p>
+              <PhoneConfirm api={api} user={user} onDone={setUser} />
             </section>
           )}
           {children}

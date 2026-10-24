@@ -1,5 +1,5 @@
-import type { BookingSettings, Country, ProductOption, ProductVariant, WorkProfile } from "@yanabuy/shared";
-import { pgTable, pgEnum, uuid, text, timestamp, jsonb, index, uniqueIndex, integer, boolean, type AnyPgColumn } from "drizzle-orm/pg-core";
+import type { BookingSettings, Country, FeeBreakdown, Fulfilment, PayoutSchedule, ProductOption, ProductVariant, WorkProfile } from "@yanabuy/shared";
+import { pgTable, pgEnum, uuid, text, timestamp, jsonb, index, uniqueIndex, integer, boolean, doublePrecision, type AnyPgColumn } from "drizzle-orm/pg-core";
 
 export const userRole = pgEnum("user_role", ["buyer", "vendor", "rider", "admin"]);
 export const userStatus = pgEnum("user_status", ["active", "blocked"]);
@@ -10,7 +10,10 @@ export const users = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     fullName: text("full_name").notNull(),
     // Always stored as +231XXXXXXXXX or +1XXXXXXXXXX (see @yanabuy/shared normalizePhone).
-    phone: text("phone").notNull(),
+    // null = signed up with an email only (a phone can be added later).
+    phone: text("phone"),
+    /** When the phone was confirmed with a text-message code. null = not confirmed yet. */
+    phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
     email: text("email"),
     /** When the email was confirmed with a code. null = not confirmed yet. */
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
@@ -29,6 +32,14 @@ export const users = pgTable(
     /** "shopify" for imported accounts (customers and placeholder shop owners). */
     importedFrom: text("imported_from"),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    /** Deleted by an admin. Personal details are wiped; the row stays only so past orders still add up. */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    /** Last known spot from the phone or browser (GPS). Riders send it about every 30 s while online. */
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    locatedAt: timestamp("located_at", { withTimezone: true }),
+    /** Riders: switched "Online" in the app, so vendors near them can offer deliveries. */
+    riderOnline: boolean("rider_online").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -101,10 +112,15 @@ export const shops = pgTable(
     phone: text("phone").notNull(),
     city: text("city").notNull(),
     address: text("address").notNull(),
+    /** The shop's pin on the map. null = not set yet (the owner's last location is used instead). */
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
     /** Where the seller wants their earnings sent (phase 5). */
     payoutMethod: text("payout_method"),
     payoutName: text("payout_name"),
     payoutPhone: text("payout_phone"),
+    /** How often the admin pays this shop: daily, weekly, monthly or on_request. */
+    payoutSchedule: text("payout_schedule").$type<PayoutSchedule>().notNull().default("weekly"),
     /** Visible reviews across all the shop's products. */
     ratingCount: integer("rating_count").notNull().default(0),
     ratingTotal: integer("rating_total").notNull().default(0),
@@ -124,6 +140,10 @@ export const shops = pgTable(
     hours: text("hours"),
     /** Table bookings (restaurants) or appointments (services). null = not taking bookings. */
     bookingSettings: jsonb("booking_settings").$type<BookingSettings>(),
+    /** Restaurants: buyers can order to eat in at the restaurant (menu price only, paid at the restaurant). */
+    eatIn: boolean("eat_in").notNull().default(false),
+    /** Restaurants: buyers can order and collect it themselves (menu price only, no delivery fee). */
+    pickup: boolean("pickup").notNull().default(false),
     /** Which country the shop sells in ("LR" or "US"). Shoppers only see shops from the country they picked. */
     country: text("country").$type<Country>().notNull().default("LR"),
     /** The work profile: tagline, about, experience, skills, videos… null = not filled in. */
@@ -163,7 +183,7 @@ export const categories = pgTable(
 );
 
 export const bannerKind = pgEnum("banner_kind", ["banner", "ad"]);
-export const bannerPlacement = pgEnum("banner_placement", ["hero", "strip"]);
+export const bannerPlacement = pgEnum("banner_placement", ["hero", "strip", "promo"]);
 export const bannerPlatform = pgEnum("banner_platform", ["all", "web", "app"]);
 export const bannerMode = pgEnum("banner_mode", ["all", "goods", "food"]);
 
@@ -176,6 +196,8 @@ export const banners = pgTable(
     title: text("title").notNull(),
     subtitle: text("subtitle"),
     imageUrl: text("image_url").notNull(),
+    /** A 5–10 second video ad / promo (imageUrl is its cover). */
+    videoUrl: text("video_url"),
     linkUrl: text("link_url"),
     buttonLabel: text("button_label"),
     /** For ads: who paid for it. */
@@ -228,6 +250,8 @@ export const products = pgTable(
     price: integer("price").notNull(),
     /** The old price, shown crossed out for a deal. */
     compareAtPrice: integer("compare_at_price"),
+    /** Flash sale: when the old price (compareAtPrice) comes back. Null = no end. */
+    saleEndsAt: timestamp("sale_ends_at", { withTimezone: true }),
     /** null = the seller doesn't count stock. */
     stock: integer("stock"),
     images: jsonb("images").$type<string[]>().notNull().default([]),
@@ -244,6 +268,8 @@ export const products = pgTable(
     shipsFromChina: boolean("ships_from_china").notNull().default(false),
     /** Rough delivery time in days, shown to buyers (mainly for China items). */
     deliveryDays: integer("delivery_days"),
+    /** Weight of one, in grams, for weight-based delivery fees. null = use the admin's default item weight. */
+    weightGrams: integer("weight_grams"),
     /** A service people book a time for (e.g. a photo shoot), instead of having it delivered. */
     bookable: boolean("bookable").notNull().default(false),
     /** How long one appointment takes, in minutes. */
@@ -305,6 +331,27 @@ export const orders = pgTable(
     deliveryAddress: text("delivery_address").notNull(),
     /** The delivery area picked at checkout (e.g. "Sinkor – City Hall"), if areas are set up. */
     deliveryArea: text("delivery_area"),
+    /** The delivery pin (the buyer's phone/browser location, or a spot they picked on the map). */
+    deliveryLat: doublePrecision("delivery_lat"),
+    deliveryLng: doublePrecision("delivery_lng"),
+    /** Distance pricing: estimated road distance (metres) and order weight (grams) the fee was worked out from. */
+    deliveryDistanceM: integer("delivery_distance_m"),
+    deliveryWeightG: integer("delivery_weight_g"),
+    /** How the delivery fee was worked out (distance pricing only). */
+    deliveryFeeBreakdown: jsonb("delivery_fee_breakdown").$type<FeeBreakdown>(),
+    /** How the buyer gets it: delivered by a rider, eaten in at the restaurant, or collected by the buyer. */
+    fulfilment: text("fulfilment").$type<Fulfilment>().notNull().default("delivery"),
+    /** Eat in / pickup: when the buyer says they'll arrive (null = as soon as it's ready). */
+    arriveAt: timestamp("arrive_at", { withTimezone: true }),
+    /** Eat in: how many people. */
+    partySize: integer("party_size"),
+    /** Eat in: the table booking this order goes with, if the buyer picked one. */
+    bookingId: uuid("booking_id").references((): AnyPgColumn => bookings.id, { onDelete: "set null" }),
+    /** A rider the shop asked to deliver, waiting for them to accept or decline. */
+    offeredRiderId: uuid("offered_rider_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
+    offeredAt: timestamp("offered_at", { withTimezone: true }),
+    /** Riders who said no to this order (so the shop sees it). */
+    declinedRiderIds: jsonb("declined_rider_ids").$type<string[]>().notNull().default([]),
     /** The shop's country when the order was placed. */
     country: text("country").$type<Country>().notNull().default("LR"),
     /** Discount-code money off this order, whole cents. Paid by YanaBuy — the seller still earns on the full subtotal. */
@@ -352,7 +399,10 @@ export const orderItems = pgTable(
     variantLabel: text("variant_label"),
     name: text("name").notNull(),
     image: text("image"),
+    /** What the buyer paid for one (seller's price + YanaBuy's commission). */
     price: integer("price").notNull(),
+    /** The seller's own price for one, at the time (null on orders from before commission was added on top). */
+    sellerPrice: integer("seller_price"),
     quantity: integer("quantity").notNull(),
   },
   (t) => [index("order_items_order_idx").on(t.orderId)]
@@ -403,6 +453,33 @@ export const walletEntries = pgTable(
 );
 
 export const payoutStatus = pgEnum("payout_status", ["requested", "paid", "rejected"]);
+
+export const riderEntryType = pgEnum("rider_entry_type", ["trip", "payout", "adjustment"]);
+
+/**
+ * What YanaBuy owes each rider, as a list of movements. The balance is the sum.
+ * trip = the full delivery fee of a delivered order; payout = money the admin sent (negative).
+ */
+export const riderEntries = pgTable(
+  "rider_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    riderId: uuid("rider_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: riderEntryType("type").notNull(),
+    /** Cents; money owed to the rider is positive, money paid out negative. */
+    amount: integer("amount").notNull(),
+    orderId: uuid("order_id").references(() => orders.id, { onDelete: "set null" }),
+    /** The mobile money transaction ID of a payout. */
+    reference: text("reference"),
+    note: text("note"),
+    byUserId: uuid("by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("rider_entries_rider_idx").on(t.riderId), uniqueIndex("rider_entries_trip_key").on(t.orderId, t.type)]
+);
+export type RiderEntryRow = typeof riderEntries.$inferSelect;
 
 export const payouts = pgTable(
   "payouts",
@@ -455,6 +532,39 @@ export const payments = pgTable(
   },
   (t) => [uniqueIndex("payments_provider_ref_key").on(t.providerRef), index("payments_buyer_idx").on(t.buyerId)]
 );
+
+/**
+ * Money YanaBuy sent out through MTN Disbursements (the "Send by MoMo" button).
+ * The payout / rider entry is written first so the money can't be sent twice;
+ * if MTN says it failed, the money is put back on what's owed.
+ */
+export const momoTransfers = pgTable(
+  "momo_transfers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** "shop" or "rider". */
+    kind: text("kind").notNull(),
+    shopId: uuid("shop_id").references(() => shops.id, { onDelete: "set null" }),
+    riderId: uuid("rider_id").references(() => users.id, { onDelete: "set null" }),
+    amount: integer("amount").notNull(),
+    currency: text("currency").notNull(),
+    phone: text("phone").notNull(),
+    name: text("name").notNull(),
+    /** MTN's X-Reference-Id for this transfer. */
+    providerRef: text("provider_ref").notNull(),
+    status: paymentStatusEnum("status").notNull().default("pending"),
+    providerTxnId: text("provider_txn_id"),
+    failureReason: text("failure_reason"),
+    payoutId: uuid("payout_id").references(() => payouts.id, { onDelete: "set null" }),
+    riderEntryId: uuid("rider_entry_id").references(() => riderEntries.id, { onDelete: "set null" }),
+    byUserId: uuid("by_user_id").references(() => users.id, { onDelete: "set null" }),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("momo_transfers_provider_ref_key").on(t.providerRef), index("momo_transfers_status_idx").on(t.status)]
+);
+export type MomoTransferRow = typeof momoTransfers.$inferSelect;
 
 // ─── Phase 6: reviews, chat, disputes, China sourcing ──────────────────────
 
@@ -653,10 +763,11 @@ export const riderApplications = pgTable(
     city: text("city").notNull(),
     /** The parts of town they can cover, in their words. */
     areas: text("areas").notNull(),
-    idType: idDocumentType("id_type").notNull(),
-    idFrontKey: text("id_front_key").notNull(),
+    // ID photos: only on older applications (riders now just confirm their email).
+    idType: idDocumentType("id_type"),
+    idFrontKey: text("id_front_key"),
     idBackKey: text("id_back_key"),
-    selfieKey: text("selfie_key").notNull(),
+    selfieKey: text("selfie_key"),
     /** Driver's licence — needed for motorbike, keke and car. */
     licenseKey: text("license_key"),
     emergencyName: text("emergency_name").notNull(),
@@ -958,12 +1069,79 @@ export const passwordResets = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     codeHash: text("code_hash").notNull(),
+    /** Where the code went: "email" or "sms" (a correct code also confirms that address/number). */
+    channel: text("channel"),
     attempts: integer("attempts").notNull().default(0),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     usedAt: timestamp("used_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("password_resets_user_idx").on(t.userId, t.createdAt)]
+);
+
+/** 6-digit text-message codes that confirm a phone number. Only the hash is kept. */
+export const phoneCodes = pgTable(
+  "phone_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The number being confirmed (may differ from users.phone when changing it). */
+    phone: text("phone").notNull(),
+    codeHash: text("code_hash").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("phone_codes_user_idx").on(t.userId, t.createdAt)]
+);
+
+/**
+ * The second step of logging in: the password was right, now a 6-digit code
+ * (by text or email) finishes it. Also used when someone claims an account
+ * from the old Shopify store (purpose "claim", with the sign-up details in `pending`).
+ */
+export const loginChallenges = pgTable(
+  "login_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** The app holds the random challenge id; only its hash is stored. */
+    tokenHash: text("token_hash").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    purpose: text("purpose").notNull().default("login"),
+    /** "sms" or "email" — where the latest code went. */
+    channel: text("channel").notNull(),
+    target: text("target").notNull(),
+    codeHash: text("code_hash").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    sends: integer("sends").notNull().default(1),
+    pending: jsonb("pending").$type<Record<string, unknown>>(),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("login_challenges_token_key").on(t.tokenHash), index("login_challenges_user_idx").on(t.userId, t.createdAt)]
+);
+
+/** "Trust this device for 30 days": skips the login code. Never used for admins. Only the hash is kept. */
+export const trustedDevices = pgTable(
+  "trusted_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("trusted_devices_token_key").on(t.tokenHash), index("trusted_devices_user_idx").on(t.userId)]
 );
 
 /** Messages admins sent to groups of people (or one person). */
@@ -974,14 +1152,20 @@ export const broadcasts = pgTable(
     title: text("title").notNull(),
     body: text("body").notNull(),
     link: text("link"),
-    /** everyone | buyers | vendors | riders | user */
+    /** everyone | buyers | vendors | riders | online_riders | people | user */
     audience: text("audience").notNull(),
+    /** For "people": everyone picked. */
+    userIds: jsonb("user_ids").$type<string[]>(),
+    /** Only people near a shop. */
+    near: jsonb("near").$type<{ shopId: string; shopName: string; radiusKm: number }>(),
+    urgent: boolean("urgent").notNull().default(false),
     country: text("country").$type<Country>(),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     channels: jsonb("channels").$type<{ app: boolean; email: boolean; sms: boolean }>().notNull(),
     recipients: integer("recipients").notNull().default(0),
     emailsSent: integer("emails_sent").notNull().default(0),
     smsSent: integer("sms_sent").notNull().default(0),
+    smsFailed: integer("sms_failed").notNull().default(0),
     /** sending | sent */
     status: text("status").notNull().default("sending"),
     sentById: uuid("sent_by_id").references(() => users.id, { onDelete: "set null" }),

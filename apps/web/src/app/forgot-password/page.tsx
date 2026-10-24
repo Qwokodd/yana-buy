@@ -8,12 +8,12 @@ import { AuthShell } from "@/components/AuthShell";
 import { api } from "@/lib/api";
 import { useCountry } from "@/lib/country";
 
-/** Forgot password: phone number → 6-digit code (email and/or SMS) → new password. */
+/** Forgot password: phone number or email → 6-digit code (by text or email) → new password. */
 export default function ForgotPasswordPage() {
   const phoneExample = useCountry().country === "US" ? "(215) 555 0123" : "0770 000 000";
   const { setUser } = useAuth();
   const router = useRouter();
-  const [step, setStep] = useState<"phone" | "code">("phone");
+  const [step, setStep] = useState<"login" | "code">("login");
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
@@ -22,7 +22,8 @@ export default function ForgotPasswordPage() {
   const [fields, setFields] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search).get("phone");
+    const q = new URLSearchParams(window.location.search);
+    const p = q.get("login") ?? q.get("phone");
     if (p) setPhone(p);
   }, []);
 
@@ -34,7 +35,12 @@ export default function ForgotPasswordPage() {
     try {
       await api.auth.forgotPassword(phone);
       setStep("code");
-      setNotice({ tone: "info", text: "If this number has an account, we've sent a 6-digit code to its email address (and by text message). It works for 15 minutes." });
+      setNotice({
+        tone: "info",
+        text: phone.includes("@")
+          ? "If this email has an account, we've emailed it a 6-digit code (check spam too). It works for 15 minutes."
+          : "If this number has an account, we've texted it a 6-digit code (or emailed it, if texts can't be sent). It works for 15 minutes.",
+      });
     } catch (err) {
       setNotice({ tone: "danger", text: messageOf(err) });
       setFields(fieldErrorsOf(err));
@@ -49,7 +55,7 @@ export default function ForgotPasswordPage() {
     setNotice(null);
     setFields({});
     try {
-      const res = await api.auth.resetPassword({ phone, code, password });
+      const res = await api.auth.resetPassword({ login: phone, code, password });
       setUser(res.user);
       router.replace("/account?reset=1");
     } catch (err) {
@@ -61,16 +67,29 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <AuthShell title="Reset your password" subtitle="We'll send a code to the email and phone on your account.">
+    <AuthShell title="Reset your password" subtitle="We'll send a code to your phone or email.">
       {notice && (
         <div className="mb-4">
           <Alert tone={notice.tone}>{notice.text}</Alert>
         </div>
       )}
-      {step === "phone" ? (
+      {step === "login" ? (
         <form onSubmit={sendCode} className="flex flex-col gap-4" noValidate>
-          <Field label="Phone number" error={fields.phone} hint="The number you log in with.">
-            {(id) => <TextInput id={id} type="tel" inputMode="tel" autoComplete="tel" placeholder={phoneExample} value={phone} onChange={(e) => setPhone(e.target.value)} invalid={!!fields.phone} required />}
+          <Field label="Phone number or email" error={fields.login ?? fields.phone ?? fields.email} hint="The one you log in with.">
+            {(id) => (
+              <TextInput
+                id={id}
+                type="text"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                placeholder={`${phoneExample} or you@example.com`}
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                invalid={!!(fields.login ?? fields.phone ?? fields.email)}
+                required
+              />
+            )}
           </Field>
           <Button type="submit" size="lg" busy={busy} className="w-full">
             Send me a code
@@ -93,11 +112,11 @@ export default function ForgotPasswordPage() {
             <button type="button" onClick={() => sendCode()} disabled={busy} className="font-bold text-purple hover:underline">
               Send a new code
             </button>
-            <button type="button" onClick={() => setStep("phone")} className="font-bold text-soft hover:underline">
-              Change number
+            <button type="button" onClick={() => setStep("login")} className="font-bold text-soft hover:underline">
+              Use a different number or email
             </button>
           </div>
-          <p className="text-[12.5px] text-muted">No email on your account and no text? Contact YanaBuy support from the number you signed up with.</p>
+          <p className="text-[12.5px] text-muted">No code? Check the number or email, wait a minute and send a new one — or contact YanaBuy support.</p>
         </form>
       )}
       <p className="mt-6 text-center text-sm text-muted">

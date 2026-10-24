@@ -1,13 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, count, desc, eq, gt, gte, ilike, isNull, lte, or, sql, type SQL } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
+import { and, count, desc, eq, gt, gte, ilike, inArray, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../db/client";
-import { auditLogs, banners, categories, disputes, riderApplications, orders, payouts, products, shops, sourcingRequests, users } from "../db/schema";
+import { auditLogs, banners, categories, disputes, riderApplications, orders, payouts, products, pushTokens, shops, sourcingRequests, users } from "../db/schema";
 import { adminShopsRouter } from "./admin-shops";
 import { adminCatalogRouter } from "./admin-catalog";
 import { adminProductsRouter } from "./admin-products";
 import { adminOrdersRouter, orderStats } from "./admin-orders";
 import { adminMoneyRouter } from "./admin-money";
+import { adminOwedRouter } from "./admin-owed";
 import { adminTrustRouter } from "./admin-trust";
 import { adminSourcingRouter } from "./admin-sourcing";
 import { adminRidersRouter } from "./admin-riders";
@@ -29,6 +32,7 @@ adminRouter.use(adminCatalogRouter);
 adminRouter.use(adminProductsRouter);
 adminRouter.use(adminOrdersRouter);
 adminRouter.use(adminMoneyRouter);
+adminRouter.use(adminOwedRouter);
 adminRouter.use(adminTrustRouter);
 adminRouter.use(adminSourcingRouter);
 adminRouter.use(adminRidersRouter);
@@ -87,7 +91,8 @@ const listSchema = z.object({
 
 adminRouter.get("/users", async (req, res) => {
   const { role, status, q, page } = parse(listSchema, req.query);
-  const filters: SQL[] = [];
+  // Deleted accounts never show in the list.
+  const filters: SQL[] = [isNull(users.deletedAt)];
   if (role) filters.push(eq(users.role, role));
   if (status) filters.push(eq(users.status, status));
   if (q) {
@@ -97,7 +102,7 @@ adminRouter.get("/users", async (req, res) => {
       or(ilike(users.fullName, like), ilike(users.email, like), ...(digits ? [ilike(users.phone, `%${digits}%`)] : []))!
     );
   }
-  const where = filters.length ? and(...filters) : undefined;
+  const where = and(...filters);
 
   const [rows, [total]] = await Promise.all([
     db
@@ -183,6 +188,80 @@ adminRouter.post("/users/:id/unblock", async (req, res) => {
     .returning();
   await audit(req.user!.id, "user.unblock", { type: "user", id: user.id }, { name: user.fullName });
   res.json({ user: adminUser(updated) });
+});
+
+const OPEN_ORDER = ["awaiting_payment", "placed", "accepted", "ready", "picked_up"] as const;
+const isForeignKeyError = (err: unknown) => {
+  const e = err as { code?: string; cause?: { code?: string } };
+  return e?.code === "23503" || e?.cause?.code === "23503";
+};
+
+/**
+ * Deletes an account for good. Accounts with no history are removed completely (with their shop
+ * and products). Accounts that already have orders, payouts or admin actions on record can't be
+ * removed without breaking those records, so their personal details are wiped instead: no name,
+ * phone, email, photo or password, their shop is closed, and the phone/email are free to sign up again.
+ */
+adminRouter.delete("/users/:id", async (req, res) => {
+  const user = await getUserOr404(req.params.id);
+  if (user.deletedAt) throw new HttpError(400, "This account is already deleted");
+  if (user.id === req.user!.id) throw new HttpError(400, "You can't delete your own account");
+  if (user.role === "admin") await assertNotLastAdmin(user.id);
+
+  const [shop] = await db.select({ id: shops.id, name: shops.name }).from(shops).where(eq(shops.ownerId, user.id)).limit(1);
+  const theirs = [eq(orders.buyerId, user.id), eq(orders.riderId, user.id), ...(shop ? [eq(orders.shopId, shop.id)] : [])];
+  const [open] = await db
+    .select({ n: count() })
+    .from(orders)
+    .where(and(inArray(orders.status, [...OPEN_ORDER]), or(...theirs)));
+  if (open.n > 0) {
+    throw new HttpError(400, `${user.fullName} still has ${open.n} open order${open.n === 1 ? "" : "s"}. Finish or cancel ${open.n === 1 ? "it" : "them"} first, then delete the account.`);
+  }
+
+  const details = { name: user.fullName, phone: user.phone, email: user.email, role: user.role, shop: shop?.name ?? null };
+  const unusable = await bcrypt.hash(randomBytes(32).toString("hex"), 10);
+  let erased = false;
+  await db.transaction(async (tx) => {
+    try {
+      // A savepoint: if other records point at this account, only this step rolls back.
+      await tx.transaction(async (sp) => {
+        await sp.delete(users).where(eq(users.id, user.id));
+      });
+    } catch (err) {
+      if (!isForeignKeyError(err)) throw err;
+      erased = true;
+      const now = new Date();
+      await tx
+        .update(users)
+        .set({
+          fullName: "Deleted account",
+          phone: null,
+          phoneVerifiedAt: null,
+          email: null,
+          emailVerifiedAt: null,
+          passwordHash: unusable,
+          role: "buyer",
+          status: "blocked",
+          blockedReason: "This account was deleted",
+          blockedAt: now,
+          avatarUrl: null,
+          city: null,
+          unclaimed: false,
+          lat: null,
+          lng: null,
+          locatedAt: null,
+          riderOnline: false,
+          deletedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(users.id, user.id));
+      if (shop) await tx.update(shops).set({ status: "suspended", statusReason: "The owner's account was deleted" }).where(eq(shops.id, shop.id));
+      await tx.delete(pushTokens).where(eq(pushTokens.userId, user.id));
+    }
+  });
+  if (erased) await endAllSessions(user.id);
+  await audit(req.user!.id, "user.delete", { type: "user", id: user.id }, { ...details, kept: erased ? "past records only (details wiped)" : "nothing" });
+  res.json({ deleted: true, erased });
 });
 
 adminRouter.get("/audit-log", async (req, res) => {

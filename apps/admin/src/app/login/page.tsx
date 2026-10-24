@@ -2,10 +2,24 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Alert, Button, Field, Logo, PasswordInput, TextInput, fieldErrorsOf, messageOf, useAuth } from "@yanabuy/web-kit";
+import type { LoginChallenge } from "@yanabuy/shared";
+import {
+  Alert,
+  Button,
+  Field,
+  LoginCode,
+  Logo,
+  PasswordInput,
+  TextInput,
+  fieldErrorsOf,
+  messageOf,
+  useAuth,
+} from "@yanabuy/web-kit";
+import { api } from "@/lib/api";
 
 export default function AdminLogin() {
-  const { user, login } = useAuth();
+  const { user, login, verifyCode } = useAuth();
+  const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const router = useRouter();
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
@@ -23,8 +37,10 @@ export default function AdminLogin() {
     setError(null);
     setFields({});
     try {
-      await login(phone, password);
-      router.replace("/");
+      // Admins always get a 6-digit code (by text, or by email when logging in with an email).
+      const step = await login(phone, password);
+      if (step.challenge) setChallenge(step.challenge);
+      else router.replace("/");
     } catch (err) {
       setError(messageOf(err));
       setFields(fieldErrorsOf(err));
@@ -37,25 +53,82 @@ export default function AdminLogin() {
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-ink px-4">
       <div className="absolute -right-24 -top-24 h-[380px] w-[380px] rounded-full bg-amber/90" />
       <div className="absolute -bottom-32 -left-16 h-[320px] w-[320px] rounded-full bg-purple-light" />
-      <form onSubmit={submit} noValidate className="relative w-full max-w-[400px] rounded-sheet bg-white p-8 shadow-2xl">
-        <div className="mb-6 flex items-center gap-2 text-[16px]">
-          <Logo size={30} dark />
-          <span className="text-[10px] font-bold tracking-[1.4px] text-muted">ADMIN</span>
+      {challenge ? (
+        <div className="relative w-full max-w-[400px] rounded-sheet bg-white p-8 shadow-2xl">
+          <div className="mb-6 flex items-center gap-2 text-[16px]">
+            <Logo size={30} dark />
+            <span className="text-[10px] font-bold tracking-[1.4px] text-muted">
+              ADMIN
+            </span>
+          </div>
+          <h1 className="mb-5 font-display text-2xl font-extrabold">
+            Enter your login code
+          </h1>
+          <LoginCode
+            api={api}
+            challenge={challenge}
+            allowTrust={false}
+            onVerify={async (input) => {
+              await verifyCode(input);
+              router.replace("/");
+            }}
+            onBack={() => {
+              setChallenge(null);
+              setPassword("");
+            }}
+          />
         </div>
-        <h1 className="mb-5 font-display text-2xl font-extrabold">Log in to the admin console</h1>
-        <div className="flex flex-col gap-4">
-          {error && <Alert>{error}</Alert>}
-          <Field label="Phone number" error={fields.phone}>
-            {(id) => <TextInput id={id} type="tel" autoComplete="tel" placeholder="0770 000 000" value={phone} onChange={(e) => setPhone(e.target.value)} invalid={!!fields.phone} />}
-          </Field>
-          <Field label="Password" error={fields.password}>
-            {(id) => <PasswordInput id={id} autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} invalid={!!fields.password} />}
-          </Field>
-          <Button type="submit" size="lg" busy={busy} className="mt-1 w-full">
-            Log in
-          </Button>
-        </div>
-      </form>
+      ) : (
+        <form
+          onSubmit={submit}
+          noValidate
+          className="relative w-full max-w-[400px] rounded-sheet bg-white p-8 shadow-2xl"
+        >
+          <div className="mb-6 flex items-center gap-2 text-[16px]">
+            <Logo size={30} dark />
+            <span className="text-[10px] font-bold tracking-[1.4px] text-muted">
+              ADMIN
+            </span>
+          </div>
+          <h1 className="mb-5 font-display text-2xl font-extrabold">
+            Log in to the admin console
+          </h1>
+          <div className="flex flex-col gap-4">
+            {error && <Alert>{error}</Alert>}
+            <Field
+              label="Phone number or email"
+              error={fields.login ?? fields.phone ?? fields.email}
+            >
+              {(id) => (
+                <TextInput
+                  id={id}
+                  type="text"
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  placeholder="0770 000 000 or you@yanabuy.com"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  invalid={!!(fields.login ?? fields.phone ?? fields.email)}
+                />
+              )}
+            </Field>
+            <Field label="Password" error={fields.password}>
+              {(id) => (
+                <PasswordInput
+                  id={id}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  invalid={!!fields.password}
+                />
+              )}
+            </Field>
+            <Button type="submit" size="lg" busy={busy} className="mt-1 w-full">
+              Log in
+            </Button>
+          </div>
+        </form>
+      )}
     </main>
   );
 }

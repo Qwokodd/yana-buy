@@ -7,6 +7,7 @@ import { db } from "../db/client";
 import { banners, categories, portfolioItems, products, reviews, shops, users, type ShopRow } from "../db/schema";
 import { HttpError, parse } from "../lib/http";
 import { average, liveProduct, liveShop, productCard, productColumns, productFull } from "../lib/products";
+import { foodHowOf } from "../lib/finance";
 import { getBranding } from "../lib/branding";
 import { slotsFor } from "../lib/bookings";
 import { bannerOut, categoryOut } from "../lib/serialize";
@@ -36,7 +37,7 @@ publicRouter.get("/categories", async (req, res) => {
 const bannerQuery = z.object({
   platform: z.enum(["web", "app"]),
   mode: z.enum(["goods", "food"]).optional(),
-  placement: z.enum(["hero", "strip"]).optional(),
+  placement: z.enum(["hero", "strip", "promo"]).optional(),
 });
 
 /** Banners and ads that are switched on and inside their dates, in the admin's order. */
@@ -87,6 +88,16 @@ const productQuery = z.object({
     .enum(["true", "false", "1", "0"])
     .optional()
     .transform((v) => v === "true" || v === "1"),
+  /** Only items YanaBuy picked as featured. */
+  featured: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
+  /** Only flash sales still running (soonest to end first). */
+  flash: z
+    .enum(["true", "false", "1", "0"])
+    .optional()
+    .transform((v) => v === "true" || v === "1"),
   /** Only services people can book a time for. */
   bookable: z
     .enum(["true", "false", "1", "0"])
@@ -97,11 +108,13 @@ const productQuery = z.object({
 
 /** Products shoppers can see, with search, category, shop and sort. */
 publicRouter.get("/products", async (req, res) => {
-  const { q, mode, category, shop, sort, page, china, bookable } = parse(productQuery, req.query);
+  const { q, mode, category, shop, sort, page, china, bookable, featured, flash } = parse(productQuery, req.query);
   // One shop's own page lists all its products whatever country is picked (a shared link must still work).
   const filters: SQL[] = [liveProduct, ...(shop ? [] : [eq(shops.country, countryOf(req))])];
   if (china) filters.push(eq(products.shipsFromChina, true));
   if (bookable) filters.push(eq(products.bookable, true));
+  if (featured) filters.push(eq(products.featured, true));
+  if (flash) filters.push(gt(products.saleEndsAt, new Date()));
   if (mode) filters.push(eq(products.kind, mode));
   if (category) filters.push(eq(categories.slug, category));
   if (shop) filters.push(eq(shops.slug, shop));
@@ -113,8 +126,9 @@ publicRouter.get("/products", async (req, res) => {
     }
   }
   const where = and(...filters);
-  const order =
-    sort === "price_asc"
+  const order = flash
+    ? [asc(products.saleEndsAt)]
+    : sort === "price_asc"
       ? [asc(products.price), desc(products.createdAt)]
       : sort === "price_desc"
         ? [desc(products.price), desc(products.createdAt)]
@@ -133,7 +147,7 @@ publicRouter.get("/products", async (req, res) => {
       .leftJoin(categories, eq(categories.id, products.categoryId));
 
   const [rows, [total]] = await Promise.all([
-    base().where(where).orderBy(...order).limit(PAGE).offset((page - 1) * PAGE),
+    base().where(where).orderBy(...order, asc(products.id)).limit(PAGE).offset((page - 1) * PAGE),
     db
       .select({ n: count() })
       .from(products)
@@ -142,7 +156,8 @@ publicRouter.get("/products", async (req, res) => {
       .leftJoin(categories, eq(categories.id, products.categoryId))
       .where(where),
   ]);
-  res.json({ items: rows.map(productCard), total: total.n, page, pageSize: PAGE });
+  const how = foodHowOf(req);
+  res.json({ items: rows.map((r) => productCard(r, how)), total: total.n, page, pageSize: PAGE });
 });
 
 publicRouter.get("/products/:id", async (req, res) => {
@@ -163,7 +178,8 @@ publicRouter.get("/products/:id", async (req, res) => {
     .where(and(eq(products.shopId, row.shop.id), ne(products.id, row.product.id), liveProduct))
     .orderBy(desc(products.featured), desc(products.createdAt))
     .limit(8);
-  res.json({ product: productFull(row), more: more.map(productCard) });
+  const how = foodHowOf(req);
+  res.json({ product: productFull(row, how), more: more.map((r) => productCard(r, how)) });
 });
 
 function publicShop(s: ShopRow, productCount: number, category?: { id: string | null; name: string | null; slug: string | null } | null, portfolioCount = 0): PublicShop {
@@ -181,6 +197,8 @@ function publicShop(s: ShopRow, productCount: number, category?: { id: string | 
     address: s.address,
     category: category?.id ? { id: category.id, name: category.name!, slug: category.slug! } : null,
     hours: s.hours,
+    eatIn: s.kind === "restaurant" && s.eatIn,
+    pickup: s.kind === "restaurant" && s.pickup,
     booking: s.bookingSettings?.enabled
       ? { kind: s.kind === "restaurant" ? "table" : "service", maxPartySize: s.bookingSettings.maxPartySize, daysAhead: s.bookingSettings.daysAhead, note: s.bookingSettings.note }
       : null,

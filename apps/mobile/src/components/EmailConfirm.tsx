@@ -7,14 +7,12 @@ import { colors, font } from "@/lib/theme";
 
 /** Add, change or confirm an email: type it, get a 6-digit code by email, enter the code. */
 export function EmailConfirm({ user, onDone, changing = false }: { user: User; onDone: (u: User) => void; changing?: boolean }) {
-  const waiting = !changing && !!user.email && !user.emailVerified;
+  // Codes are only sent when asked for ("Send me a code"), with their email already filled in.
   const [email, setEmail] = useState(changing ? "" : (user.email ?? ""));
-  const [sentTo, setSentTo] = useState<string | null>(waiting ? user.email : null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ tone: "success" | "danger" | "info"; text: string } | null>(
-    waiting ? { tone: "info", text: `We sent a 6-digit code to ${user.email}. Check your inbox (and spam).` } : null
-  );
+  const [notice, setNotice] = useState<{ tone: "success" | "danger" | "info"; text: string } | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
 
   const fail = (err: unknown) => {

@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import {
+  deliveryDetailLabel,
   formatLD,
   formatLiberianPhone,
-  ORDER_STATUS_LABEL,
-  PAYMENT_METHOD_LABEL,
+  FULFILMENT_LABEL,
+  orderStatusLabel,
+  payLabel,
+  type Fulfilment,
   type Order,
   type OrderStatus,
   type OrderSummary,
@@ -27,8 +30,8 @@ const TONE: Record<OrderStatus, "warn" | "purple" | "success" | "neutral" | "dan
   cancelled: "danger",
 };
 
-export function OrderStatusBadge({ status }: { status: OrderStatus }) {
-  return <Badge tone={TONE[status]}>{ORDER_STATUS_LABEL[status]}</Badge>;
+export function OrderStatusBadge({ status, fulfilment = "delivery" }: { status: OrderStatus; fulfilment?: Fulfilment }) {
+  return <Badge tone={TONE[status]}>{orderStatusLabel(status, fulfilment)}</Badge>;
 }
 
 const EVENT_LABEL: Record<string, string> = {
@@ -40,6 +43,10 @@ const EVENT_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
   rider_assigned: "Rider assigned",
   rider_removed: "Rider removed",
+  rider_offered: "Shop asked a rider",
+  rider_broadcast: "Nearby riders were told it's ready",
+  rider_declined: "Rider said no",
+  rider_offer_cancelled: "Shop cancelled its rider request",
   dispute_opened: "Buyer reported a problem",
   dispute_response: "Seller answered the problem",
   dispute_resolved: "YanaBuy decided the problem",
@@ -157,6 +164,7 @@ export function OrdersBrowser({ board = false }: { board?: boolean }) {
                           <span className="block font-bold">{o.number}</span>
                           <span className="text-xs text-muted">
                             {whenTime(o.createdAt)} · {o.itemCount} {o.itemCount === 1 ? "item" : "items"}
+                            {o.fulfilment !== "delivery" && <span className="ml-1 font-bold text-ink">· {FULFILMENT_LABEL[o.fulfilment]}</span>}
                           </span>
                         </span>
                       </button>
@@ -165,7 +173,7 @@ export function OrdersBrowser({ board = false }: { board?: boolean }) {
                     <td className="whitespace-nowrap px-3 py-3 font-semibold">{formatLD(o.total)}</td>
                     <td className="px-3 py-3 text-soft">{o.rider?.fullName ?? <span className="text-muted">—</span>}</td>
                     <td className="px-3 py-3">
-                      <OrderStatusBadge status={o.status} />
+                      <OrderStatusBadge status={o.status} fulfilment={o.fulfilment} />
                     </td>
                   </tr>
                 ))}
@@ -288,7 +296,8 @@ function OrderPanel({ id, riders, onChanged }: { id: string; riders: RiderSummar
 
   if (!order) return <div className="rounded-[20px] border border-line bg-white p-6 text-sm text-muted">{error ?? "Loading…"}</div>;
 
-  const canAssign = ["accepted", "ready", "picked_up"].includes(order.status);
+  // Eat in / pickup: the buyer comes to the restaurant — no rider.
+  const canAssign = order.fulfilment === "delivery" && ["accepted", "ready", "picked_up"].includes(order.status);
   const open = order.status !== "delivered" && order.status !== "cancelled";
 
   return (
@@ -297,10 +306,10 @@ function OrderPanel({ id, riders, onChanged }: { id: string; riders: RiderSummar
         <div>
           <p className="font-display text-xl font-extrabold">{order.number}</p>
           <p className="text-[12.5px] text-muted">
-            {whenTime(order.createdAt)} · {PAYMENT_METHOD_LABEL[order.paymentMethod]} · {order.paymentStatus === "paid" ? "paid" : "not paid yet"}
+            {whenTime(order.createdAt)} · {FULFILMENT_LABEL[order.fulfilment]} · {payLabel(order.paymentMethod, order.fulfilment)} · {order.paymentStatus === "paid" ? "paid" : "not paid yet"}
           </p>
         </div>
-        <OrderStatusBadge status={order.status} />
+        <OrderStatusBadge status={order.status} fulfilment={order.fulfilment} />
       </div>
 
       {notice && <Alert tone="success">{notice}</Alert>}
@@ -341,7 +350,7 @@ function OrderPanel({ id, riders, onChanged }: { id: string; riders: RiderSummar
           <dd>{formatLD(order.subtotal)}</dd>
         </div>
         <div className="flex justify-between">
-          <dt className="text-muted">Delivery</dt>
+          <dt className="text-muted">{order.fulfilment !== "delivery" ? `${FULFILMENT_LABEL[order.fulfilment]} — no delivery fee` : "Delivery"}{order.deliveryFeeBreakdown ? ` (${deliveryDetailLabel({ ...order.deliveryFeeBreakdown, weightCharged: order.deliveryFeeBreakdown.weightFeeCents > 0 })})` : ""}</dt>
           <dd>{order.deliveryFee ? formatLD(order.deliveryFee) : "Free"}</dd>
         </div>
         {order.discount > 0 && (
@@ -354,6 +363,24 @@ function OrderPanel({ id, riders, onChanged }: { id: string; riders: RiderSummar
           <dt>Total</dt>
           <dd>{formatLD(order.total)}</dd>
         </div>
+        {order.sellerEarning != null && (
+          <>
+            <div className="flex justify-between border-t border-line pt-1 text-soft">
+              <dt>Shop earns (its own prices)</dt>
+              <dd>{formatLD(order.sellerEarning)}</dd>
+            </div>
+            <div className="flex justify-between text-purple">
+              <dt>YanaBuy commission</dt>
+              <dd>{formatLD(order.subtotal - order.sellerEarning)}</dd>
+            </div>
+            {order.fulfilment === "delivery" && order.deliveryFee > 0 && (
+              <div className="flex justify-between text-soft">
+                <dt>Rider earns (delivery fee)</dt>
+                <dd>{formatLD(order.deliveryFee)}</dd>
+              </div>
+            )}
+          </>
+        )}
       </dl>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -364,8 +391,15 @@ function OrderPanel({ id, riders, onChanged }: { id: string; riders: RiderSummar
           <p className="text-muted">{formatLiberianPhone(order.shop.phone)}</p>
         </div>
         <div className="rounded-2xl bg-ground p-3 text-[13px]">
-          <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">Deliver to</p>
+          <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-muted">{order.fulfilment === "delivery" ? "Deliver to" : order.fulfilment === "eat_in" ? "Eating in" : "Collecting"}</p>
           <p className="font-bold">{order.delivery.name}</p>
+          {order.fulfilment !== "delivery" && (
+            <p>
+              {order.arriveAt ? `Arriving ${whenTime(order.arriveAt)}` : "As soon as it's ready"}
+              {order.partySize ? ` · ${order.partySize} people` : ""}
+              {order.booking ? ` · booking ${order.booking.number}` : ""}
+            </p>
+          )}
           <p>
             {order.delivery.address}, {order.delivery.area ? `${order.delivery.area}, ` : ""}
             {order.delivery.city}

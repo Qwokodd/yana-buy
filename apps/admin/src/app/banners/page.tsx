@@ -22,6 +22,7 @@ const EMPTY: BannerInput = {
   title: "",
   subtitle: null,
   imageUrl: "",
+  videoUrl: null,
   linkUrl: null,
   buttonLabel: null,
   advertiser: null,
@@ -49,7 +50,8 @@ export default function BannersPage() {
 
   const groups = [
     { placement: "hero" as const, title: "Top banners", hint: "The big slides at the top of the home page. Shoppers swipe through them in this order." },
-    { placement: "strip" as const, title: "Promo cards", hint: "Smaller cards under the top banner — good for ads." },
+    { placement: "promo" as const, title: "Promos with countdown", hint: "Cards in the Promos row on the home page, each counting down to its end date." },
+    { placement: "strip" as const, title: "Ads between products", hint: "Wide cards shown between rows of products as shoppers scroll — good for ads." },
   ];
 
   async function move(list: AdminBanner[], index: number, by: -1 | 1) {
@@ -276,6 +278,7 @@ function BannerEditor({ banner, onCancel, onSaved }: { banner: AdminBanner | nul
         shape="wide"
       />
       {fields.imageUrl && <p className="-mt-2 text-xs font-semibold text-danger">{fields.imageUrl}</p>}
+      <VideoUpload url={form.videoUrl} onChange={(url) => set("videoUrl", url)} error={fields.videoUrl} />
 
       <Field label="Title" error={fields.title}>
         {(id) => <TextInput id={id} {...text("title")} maxLength={80} placeholder="e.g. Rainy season deals" />}
@@ -292,7 +295,15 @@ function BannerEditor({ banner, onCancel, onSaved }: { banner: AdminBanner | nul
         </Field>
       </div>
 
-      {radio("placement", [{ value: "hero", label: "Top banner" }, { value: "strip", label: "Promo card" }], "Where on the home page")}
+      {radio(
+        "placement",
+        [
+          { value: "hero", label: "Top banner" },
+          { value: "promo", label: "Promo with countdown" },
+          { value: "strip", label: "Between products" },
+        ],
+        "Where on the home page"
+      )}
       {radio("platform", [{ value: "all", label: "Website & app" }, { value: "web", label: "Website only" }, { value: "app", label: "App only" }], "Show on")}
       {radio("mode", [{ value: "all", label: "Both sides" }, { value: "goods", label: "Goods & Services" }, { value: "food", label: "Food" }], "Show to shoppers on")}
       <fieldset className="flex flex-col gap-1.5">
@@ -318,7 +329,11 @@ function BannerEditor({ banner, onCancel, onSaved }: { banner: AdminBanner | nul
             <TextInput id={id} type="datetime-local" value={toLocalInput(form.startsAt)} onChange={(e) => set("startsAt", fromLocalInput(e.target.value))} />
           )}
         </Field>
-        <Field label="Ends (optional)" error={fields.endsAt} hint="Empty = keeps running">
+        <Field
+          label={form.placement === "promo" ? "Ends (the countdown runs to this)" : "Ends (optional)"}
+          error={fields.endsAt}
+          hint={form.placement === "promo" ? "Needed for a promo." : "Empty = keeps running"}
+        >
           {(id) => (
             <TextInput id={id} type="datetime-local" value={toLocalInput(form.endsAt)} onChange={(e) => set("endsAt", fromLocalInput(e.target.value))} invalid={!!fields.endsAt} />
           )}
@@ -340,5 +355,72 @@ function BannerEditor({ banner, onCancel, onSaved }: { banner: AdminBanner | nul
         </Button>
       </div>
     </form>
+  );
+}
+
+/** A 5–10 second video ad or promo. Checked for length in the browser before it's uploaded. */
+function VideoUpload({ url, onChange, error }: { url: string | null; onChange: (url: string | null) => void; error?: string }) {
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  function lengthOf(file: File) {
+    return new Promise<number>((resolve, reject) => {
+      const v = document.createElement("video");
+      v.preload = "metadata";
+      const src = URL.createObjectURL(file);
+      v.onloadedmetadata = () => {
+        URL.revokeObjectURL(src);
+        resolve(v.duration);
+      };
+      v.onerror = () => {
+        URL.revokeObjectURL(src);
+        reject(new Error("That file can't be played — use an MP4 video"));
+      };
+      v.src = src;
+    });
+  }
+
+  async function pick(file: File | undefined) {
+    if (!file) return;
+    setProblem(null);
+    setBusy(true);
+    try {
+      const seconds = await lengthOf(file);
+      if (!Number.isFinite(seconds) || seconds < 4.5 || seconds > 10.5) {
+        setProblem(`That video is ${Number.isFinite(seconds) ? `${Math.round(seconds)} seconds` : "an unknown length"} — it must be 5 to 10 seconds.`);
+        return;
+      }
+      if (file.size > 30 * 1024 * 1024) {
+        setProblem("The video must be under 30 MB.");
+        return;
+      }
+      const res = await api.uploads.video(file);
+      onChange(res.url);
+    } catch (err) {
+      setProblem(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-[13px] font-bold">Video (optional)</p>
+      <p className="text-xs text-muted">A 5–10 second MP4. It plays muted on a loop; the picture above is shown while it loads (and to people who turn off motion).</p>
+      {url ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <video src={url} muted loop autoPlay playsInline className="h-24 w-40 rounded-lg border border-line bg-ink object-cover" />
+          <Button type="button" size="sm" variant="outline" onClick={() => onChange(null)}>
+            Remove video
+          </Button>
+        </div>
+      ) : (
+        <label className={`inline-flex h-10 w-fit cursor-pointer items-center rounded-full border border-line-strong bg-white px-4 text-[13px] font-bold text-purple hover:border-purple ${busy ? "opacity-60" : ""}`}>
+          {busy ? "Uploading…" : "Upload a video"}
+          <input type="file" accept="video/mp4,video/webm,video/quicktime" className="sr-only" disabled={busy} onChange={(e) => void pick(e.target.files?.[0])} />
+        </label>
+      )}
+      {(problem || error) && <p className="text-xs font-semibold text-danger">{problem ?? error}</p>}
+    </div>
   );
 }

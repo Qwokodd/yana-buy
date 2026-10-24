@@ -1,7 +1,7 @@
 "use client";
 
 import type { Branding } from "@yanabuy/shared";
-import { AuthProvider, BrandingProvider } from "@yanabuy/web-kit";
+import { AuthProvider, BrandingProvider, LocationReporter } from "@yanabuy/web-kit";
 import { ModeProvider } from "@/lib/mode";
 import { CountryProvider } from "@/lib/country";
 import { CartProvider } from "@/lib/cart";
@@ -14,6 +14,7 @@ export function Providers({ branding, children }: { branding: Branding; children
     <BrandingProvider initial={branding}>
       <AuthProvider api={api}>
         <EmailGate />
+        <LocationReporter api={api} />
         <ModeProvider>
           <CartProvider>
             <WishlistProvider>

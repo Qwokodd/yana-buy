@@ -57,7 +57,7 @@ export async function lockShop(tx: Tx, shopId: string) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${shopId}))`);
 }
 
-export function bookingOut(b: BookingRow, shop: ShopRow, buyer: { id: string; fullName: string; phone: string; avatarUrl: string | null }): Booking {
+export function bookingOut(b: BookingRow, shop: ShopRow, buyer: { id: string; fullName: string; phone: string | null; avatarUrl: string | null }): Booking {
   return {
     id: b.id,
     number: bookingNumber(b.number ?? 0),
